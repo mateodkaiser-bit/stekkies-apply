@@ -1,0 +1,11 @@
+node_modules/
+.env
+context.json
+*.log
+documents/
+*.png
+dryrun-pararius.png
+pararius-form.png
+pararius-fields.json
+profile.json
+recon-fields.json

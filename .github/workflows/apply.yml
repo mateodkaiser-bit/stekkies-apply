@@ -1,0 +1,65 @@
+name: stekkies-autoapply
+
+on:
+  schedule:
+    # Every 5 min, 07:00-21:00 Amsterdam (CEST = UTC+2). Free because the repo is
+    # public (unlimited Actions minutes). The 07:00 run catches up on overnight.
+    # Shift to 6-20 UTC in winter (CET) if desired.
+    - cron: '*/5 5-19 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run without submitting (dry run)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: stekkies-apply
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci --no-audit --no-fund
+      - name: Write profile from secret
+        run: printf '%s' "$PROFILE_JSON" > profile.json
+        env:
+          PROFILE_JSON: ${{ secrets.PROFILE_JSON }}
+      - name: Run orchestrator
+        env:
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "DRY-RUN mode"
+            npx tsx src/orchestrate.ts --limit=3
+          else
+            echo "LIVE mode"
+            npx tsx src/orchestrate.ts --live --limit=8
+          fi
+      - name: Persist dedupe state
+        if: always()
+        run: |
+          git config user.name "stekkies-bot"
+          git config user.email "stekkies-bot@users.noreply.github.com"
+          git add seen.json || true
+          if git diff --staged --quiet; then echo "no state change"; exit 0; fi
+          git commit -m "chore: update dedupe state [skip ci]"
+          for i in 1 2 3; do
+            if git pull --rebase --autostash origin main && git push; then echo "state pushed"; exit 0; fi
+            echo "push retry $i"; sleep 3
+          done
+          echo "WARNING: could not persist state this run"; exit 0
