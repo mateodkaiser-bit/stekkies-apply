@@ -49,7 +49,7 @@ async function getOrCreate(key: string): Promise<string> {
 
 async function createSession(contextId: string) {
   const params: any = {
-    browserSettings: { context: { id: contextId, persist: true }, solveCaptchas: true },
+    browserSettings: { context: { id: contextId, persist: true }, solveCaptchas: true, verified: true, os: 'mac' },
     proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
     timeout: 300,
   };

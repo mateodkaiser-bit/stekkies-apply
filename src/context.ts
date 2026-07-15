@@ -45,7 +45,7 @@ async function getOrCreateContext(): Promise<string> {
 
 async function createSession(contextId: string) {
   const params: any = {
-    browserSettings: { context: { id: contextId, persist: true } },
+    browserSettings: { context: { id: contextId, persist: true }, verified: true, os: 'mac' },
     timeout: 900, // Free plan caps a session at 15 minutes.
   };
   try {

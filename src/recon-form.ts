@@ -23,7 +23,7 @@ const contextId = contexts[siteKey];
 
 async function main() {
   const session: any = await bb.sessions.create({
-    browserSettings: { context: contextId ? { id: contextId, persist: false } : undefined, solveCaptchas: true },
+    browserSettings: { context: contextId ? { id: contextId, persist: false } : undefined, solveCaptchas: true, verified: true, os: 'mac' },
     proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
     timeout: 200,
   } as any);
@@ -60,12 +60,23 @@ async function main() {
           return { tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '', ph: el.placeholder || '', label: (document.querySelector(`label[for="${el.id}"]`)?.textContent || '').trim().slice(0, 45) };
         })
         .slice(0, 30),
+      buttons: Array.from(document.querySelectorAll('button, input[type=submit], input[type=button], [role=button]'))
+        .filter((e) => (e as HTMLElement).offsetParent !== null)
+        .map((e) => { const el = e as HTMLInputElement; return { tag: el.tagName.toLowerCase(), type: el.type || '', text: (el.textContent || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 40), disabled: !!el.disabled }; })
+        .slice(0, 20),
+      checkboxes: Array.from(document.querySelectorAll('input[type=checkbox]'))
+        .filter((e) => (e as HTMLElement).offsetParent !== null)
+        .map((e) => { const el = e as HTMLInputElement; return { name: el.name, id: el.id, label: (document.querySelector(`label[for="${el.id}"]`)?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 50), checked: el.checked, required: el.required }; }),
     };
   });
 
   console.log(`accountWall: ${info.accountWall} | hasPassword: ${info.hasPassword} | logged-in: ${!info.accountWall && !info.hasPassword ? 'YES' : 'NO'}`);
   console.log(`FIELDS (${info.fields.length}):`);
   for (const f of info.fields) console.log(`  ${f.label || f.ph || '(no label)'}  [${f.tag}/${f.type} name="${f.name}" id="${f.id}"]`);
+  console.log(`BUTTONS (${(info.buttons || []).length}):`);
+  for (const b of info.buttons || []) console.log(`  "${b.text}"  [${b.tag}/${b.type}${b.disabled ? ' DISABLED' : ''}]`);
+  console.log(`CHECKBOXES (${(info.checkboxes || []).length}):`);
+  for (const c of info.checkboxes || []) console.log(`  ${c.label || c.name || '(no label)'}  [checked=${c.checked} required=${c.required}]`);
   writeFileSync(join(__dirname, '..', 'recon-fields.json'), JSON.stringify(info.fields, null, 2));
 
   try { await page.screenshot({ path: join(__dirname, '..', `recon-${siteKey}.png`), fullPage: false, timeout: 15_000 }); console.log('screenshot saved'); }

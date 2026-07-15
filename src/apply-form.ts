@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
+import { clickSubmit, confirmSent } from './submit-form.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -30,7 +31,7 @@ export interface ApplyResult {
 }
 
 async function freshSession(contextId?: string) {
-  const browserSettings: any = { solveCaptchas: true };
+  const browserSettings: any = { solveCaptchas: true, verified: true, os: 'mac' };
   if (contextId) browserSettings.context = { id: contextId, persist: false };
   const session: any = await bb.sessions.create({
     browserSettings,
@@ -177,13 +178,11 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
       if (coreFilled === 0) {
         result = { status: 'needs_manual', reason: 'found a form but could not fill the key fields', letter, log };
       } else if (LIVE) {
-        let sub = '';
-        for (const t of ['Verstuur', 'Versturen', 'Verzend', 'Verzenden', 'Reageer', 'Verstuur bericht', 'Aanvragen', 'Versturen aanvraag']) {
-          try { await page.getByRole('button', { name: new RegExp(`^${t}`, 'i') }).first().click({ timeout: 4000 }); sub = t; break; } catch { /* */ }
-        }
-        log.push(`LIVE submit via: ${sub || 'NO BUTTON FOUND'}`);
+        const sub = await clickSubmit(page, log); // Dutch + English, cookie/login-safe
         await page.waitForTimeout(3000);
-        result = sub ? { status: 'applied', reason: 'submitted', letter, availableFrom: details.availableFrom, log }
+        const confirmed = sub ? await confirmSent(page) : false;
+        if (sub) log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)');
+        result = sub ? { status: 'applied', reason: confirmed ? 'submitted (confirmed)' : 'submitted (no confirmation seen)', letter, availableFrom: details.availableFrom, log }
                      : { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
       } else {
         result = { status: 'dry_run', letter, availableFrom: details.availableFrom, log };

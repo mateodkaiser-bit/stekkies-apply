@@ -13,12 +13,30 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
+import { clickSubmit, confirmSent } from './submit-form.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
 const profile = JSON.parse(readFileSync(join(__dirname, '..', 'profile.json'), 'utf8'));
 const bb = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY! });
 const F = 'contact_agent_huurprofiel_form';
+
+// Turn the listing's "available from" text into a YYYY-MM-DD for the rent-start
+// field so the FORM date matches the listing (and the letter). A conflicting
+// date (e.g. filling October when the listing says August) gets applications
+// rejected, so this must never contradict what the listing offers. Unparseable
+// / "per direct" / "in overleg" -> the first of next month (a safe near date).
+function availableToISO(s?: string | null): string {
+  const t = (s || '').toLowerCase();
+  const dmy = t.match(/(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  const iso = t.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[0];
+  const now = new Date();
+  let y = now.getFullYear(), mo = now.getMonth() + 2; // first of NEXT month, 1-indexed
+  if (mo > 12) { mo -= 12; y += 1; }
+  return `${y}-${String(mo).padStart(2, '0')}-01`;
+}
 
 export interface ApplyResult {
   status: 'applied' | 'dry_run' | 'needs_manual' | 'error';
@@ -31,7 +49,7 @@ export interface ApplyResult {
 
 async function freshSession() {
   const session: any = await bb.sessions.create({
-    browserSettings: { context: { id: contexts.pararius, persist: false }, solveCaptchas: true },
+    browserSettings: { context: { id: contexts.pararius, persist: false }, solveCaptchas: true, verified: true, os: 'mac' },
     proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
     timeout: 220,
   } as any);
@@ -92,18 +110,48 @@ export async function applyPararius(
     });
     log.push(`letter generated (${letter.split(/\s+/).length} words)`);
 
-    // 3) Open the contact form.
+    // 3) Open the contact form. On modern Pararius the 16-field form is NOT on
+    // the listing page; it lives at pararius.nl/contact/<uuid>, reached via the
+    // "Contact met de makelaar" link. We navigate straight to that /contact/ URL
+    // (deterministic: it lands on the full form with a clean "Versturen" submit).
+    // Clicking the "Contact" control instead can leave the page in a racing
+    // state where the submit button is briefly missing. Text-click is a fallback.
+    const FORM_SEL = `[name^="${F}"]`;
     let clicked = '';
-    for (const t of ['Contact met de makelaar', 'Contact met de aanbieder', 'Reageer', 'Contact']) {
-      try {
-        await page.getByRole('button', { name: new RegExp(t, 'i') })
-          .or(page.getByRole('link', { name: new RegExp(t, 'i') })).first().click({ timeout: 5000 });
-        clicked = t; break;
-      } catch { /* next */ }
+    const contactHref = await page.evaluate(() => {
+      const a = Array.from(document.querySelectorAll('a')).find((x: any) => /\/contact\/[0-9a-f-]{8,}$/i.test(x.href));
+      return a ? (a as HTMLAnchorElement).href : '';
+    });
+    if (contactHref) {
+      try { await page.goto(contactHref, { waitUntil: 'domcontentloaded', timeout: 30_000 }); clicked = 'contact-url'; } catch { /* */ }
+      await page.waitForTimeout(2500);
     }
-    log.push(`opened contact form via: ${clicked || '(?)'}`);
-    await page.waitForTimeout(3500);
-    page = ctx.pages()[ctx.pages().length - 1];
+    let formVisible = await page.locator(FORM_SEL).first().isVisible().catch(() => false);
+
+    // Fallback: no /contact/ link found (or it didn't reveal the form) -> click
+    // a contact control to open/inline it.
+    if (!formVisible) {
+      for (const t of ['Contact met de makelaar', 'Contact met de aanbieder', 'Reageer', 'Contact']) {
+        try {
+          await page.getByRole('button', { name: new RegExp(t, 'i') })
+            .or(page.getByRole('link', { name: new RegExp(t, 'i') })).first().click({ timeout: 5000 });
+          clicked = clicked || t;
+        } catch { /* next */ }
+        await page.waitForTimeout(2500);
+        page = ctx.pages()[ctx.pages().length - 1];
+        formVisible = await page.locator(FORM_SEL).first().isVisible().catch(() => false);
+        if (formVisible) break;
+      }
+    }
+    log.push(`opened contact form via: ${clicked || '(?)'} | form visible: ${formVisible}`);
+
+    // If there is genuinely no react option on this listing (reactions closed,
+    // makelaar-only, or "react on our own site"), stop with a clear reason
+    // instead of silently failing to fill and reporting a missing submit button.
+    if (!formVisible) {
+      result = { status: 'needs_manual', reason: 'no Pararius contact form on this listing (reactions closed or agent-only)', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log };
+      return result;
+    }
 
     // 4) Fill.
     const setInput = async (name: string, value: string) => {
@@ -139,8 +187,7 @@ export async function applyPararius(
     await setInput('last_name', m.lastName);
     await setInput('phone_number', phone);
     await setInput('date_of_birth', m.dob);
-    await setInput('number_of_tenants', '2');
-    await setInput('rent_start_date', '2026-10-01');
+    await setInput('rent_start_date', availableToISO(details.availableFrom));
     await setInput('motivation', letter);
     await setSelect('salutation', [/heer/i]);
     await setSelect('work_situation', [/zelfstandig|zzp|ondernemer|eigen/i, /student/i, /loondienst/i]);
@@ -151,18 +198,17 @@ export async function applyPararius(
     await setSelect('preferred_contract_period', [/onbepaald|indefinite|langer|jaar|12/i]);
     await setSelect('current_housing_situation', [/huur/i]);
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000); // let the React form settle after filling before we hunt the submit button
     try { await page.screenshot({ path: join(__dirname, '..', 'apply-pararius.png'), fullPage: false, timeout: 15_000 }); log.push('screenshot saved'); }
     catch { /* non-fatal */ }
 
     if (LIVE) {
-      let sub = '';
-      for (const t of ['Verstuur', 'Verzend', 'Versturen', 'Reageer']) {
-        try { await page.getByRole('button', { name: new RegExp(t, 'i') }).first().click({ timeout: 5000 }); sub = t; break; } catch { /* */ }
-      }
-      log.push(`LIVE submit via: ${sub || 'NO BUTTON FOUND'}`);
+      const sub = await clickSubmit(page, log); // Dutch + English, cookie/login-safe
       await page.waitForTimeout(3000);
-      result = sub ? { status: 'applied', reason: 'submitted', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log }
+      const confirmed = sub ? await confirmSent(page) : false;
+      if (sub) log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)');
+      try { await page.screenshot({ path: join(__dirname, '..', 'apply-pararius.png'), fullPage: false, timeout: 15_000 }); } catch { /* */ }
+      result = sub ? { status: 'applied', reason: confirmed ? 'submitted (confirmed)' : 'submitted (no confirmation seen)', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log }
                    : { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
     } else {
       result = { status: 'dry_run', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log };

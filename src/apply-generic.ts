@@ -49,7 +49,7 @@ export async function applyGeneric(
   opts: { live?: boolean; hint?: Partial<ListingInfo>; contextId?: string } = {},
 ): Promise<GenericResult> {
   const log: string[] = [];
-  const browserSettings: any = { solveCaptchas: true };
+  const browserSettings: any = { solveCaptchas: true, verified: true, os: 'mac' };
   if (opts.contextId) browserSettings.context = { id: opts.contextId, persist: false };
   const stagehand = new Stagehand({
     env: 'BROWSERBASE',

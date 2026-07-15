@@ -45,7 +45,7 @@ const saveSeen = (s: Seen) => writeFileSync(SEEN, JSON.stringify(s, null, 2));
 
 async function openMatchPage(matchUrl: string) {
   const session: any = await bb.sessions.create({
-    browserSettings: { context: { id: contexts.stekkies, persist: false } },
+    browserSettings: { context: { id: contexts.stekkies, persist: false }, verified: true, os: 'mac' },
     proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
     timeout: 120,
   } as any);
@@ -118,10 +118,13 @@ async function main() {
         line = `${verb}: ${label} | ${r.reason || r.status}`;
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       }
-      seen.matchIds.push(mt.matchId);
+      // Only CONSUME a match (mark it seen) on a LIVE run. In DRY-RUN we are just
+      // testing: marking it seen here would burn a fresh listing so it never gets
+      // a real application. seen.json is only persisted below when LIVE too.
+      if (LIVE) seen.matchIds.push(mt.matchId);
     } catch (e) {
       line = `ERROR: ${mt.matchId} | ${(e as Error).message.slice(0, 60)}`;
-      seen.matchIds.push(mt.matchId);
+      if (LIVE) seen.matchIds.push(mt.matchId);
     }
     console.log(' -', line);
     summary.push(line);
@@ -130,7 +133,10 @@ async function main() {
       appendFileSync(join(__dirname, '..', 'logs', 'results.log'), `${new Date().toISOString()} ${line}\n`);
     } catch { /* non-fatal */ }
   }
-  saveSeen(seen);
+  // Persist dedupe state only on LIVE runs. DRY-RUN must not write seen.json,
+  // otherwise a test run consumes fresh matches and the daily cron never applies.
+  if (LIVE) saveSeen(seen);
+  else console.log('DRY-RUN: not persisting seen.json (no matches consumed).');
 
   if (summary.length) {
     const body = `Stekkies auto-apply run (${LIVE ? 'LIVE' : 'DRY-RUN'}):\n\n${summary.join('\n')}\n`;

@@ -43,7 +43,7 @@ async function main() {
 
   console.log('▸ Opening the match with your saved login (read-only)…');
   const session: any = await bb.sessions.create({
-    browserSettings: { context: { id: contextId, persist: false } },
+    browserSettings: { context: { id: contextId, persist: false }, verified: true, os: 'mac' },
     timeout: 300,
   } as any);
   console.log(`  Session replay: https://www.browserbase.com/sessions/${session.id}`);
