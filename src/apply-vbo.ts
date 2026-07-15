@@ -70,7 +70,8 @@ export async function applyVbo(url: string, opts: { live?: boolean; hint?: Parti
 
     const details = await page.evaluate(() => {
       const text = document.body ? document.body.innerText : '';
-      const a = text.match(/(?:Aanvaarding|Beschikbaar|Oplevering|Ingangsdatum|per)\s*:?\s*([^\n]{1,40})/i);
+      // "per" only when it's "per <date>" (per 1-8-2026); bare "per" matches noise like "per maand".
+      const a = text.match(/(?:Aanvaarding|Beschikbaar|Oplevering|Ingangsdatum|\bper\s+(?=\d))\s*:?\s*([^\n]{1,40})/i);
       const d = document.querySelector('[class*="description"], [class*="omschrijving"]');
       const desc = (d ? d.textContent || '' : text).replace(/\s+/g, ' ').trim();
       return { availableFrom: a ? a[1].trim() : null, description: desc.slice(0, 1000) };

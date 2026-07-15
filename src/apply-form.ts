@@ -115,7 +115,8 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
 
     const details = await page.evaluate(() => {
       const text = document.body ? document.body.innerText : '';
-      const a = text.match(/(?:Aanvaarding|Beschikbaar|Oplevering|Available|Ingangsdatum|per)\s*:?\s*([^\n]{1,40})/i);
+      // "per" only when it's "per <date>" (per 1-8-2026); bare "per" matches noise like "per maand".
+      const a = text.match(/(?:Aanvaarding|Beschikbaar|Oplevering|Available|Ingangsdatum|\bper\s+(?=\d))\s*:?\s*([^\n]{1,40})/i);
       const d = document.querySelector('[class*="description"], [class*="omschrijving"]');
       const desc = (d ? d.textContent || '' : text).replace(/\s+/g, ' ').trim();
       return { availableFrom: a ? a[1].trim() : null, description: desc.slice(0, 1000) };
@@ -161,7 +162,20 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
             const pick = optlist.find((o) => o.v && /bezichtig|interesse|informatie|viewing|contact|huur|woning/i.test(o.t)) || optlist.find((o) => o.v && o.t);
             if (pick) { await page.selectOption(sel, pick.v); log.push(`ok select ${f.label || f.name}`); }
           } else if (cls === 'consent') {
-            await page.locator(sel).first().check({ timeout: 5000 }); log.push('ok consent');
+            const cb = page.locator(sel).first();
+            // Ignore hidden checkboxes: these are usually off-screen cookie/newsletter
+            // boxes that classify() mislabels as consent, not part of the contact form.
+            if (!(await cb.isVisible().catch(() => false))) { log.push('skip hidden consent'); continue; }
+            // Visible consent boxes are often custom-styled (real <input> hidden behind a
+            // label), so plain .check() times out. Try check, forced check, then the label.
+            try { await cb.check({ timeout: 3000 }); log.push('ok consent'); }
+            catch {
+              try { await cb.check({ force: true, timeout: 3000 }); log.push('ok consent (forced)'); }
+              catch {
+                if (f.id) { await page.locator(`label[for="${(f.id as string).replace(/([^\w-])/g, '\\$1')}"]`).first().click({ timeout: 3000 }); log.push('ok consent (label)'); }
+                else { await cb.click({ force: true, timeout: 3000 }); log.push('ok consent (click)'); }
+              }
+            }
           } else if (cls) {
             await page.locator(sel).first().fill(values[cls], { timeout: 8000 }); log.push(`ok ${cls}`);
             if (cls === 'email' || cls === 'message') coreFilled++;
