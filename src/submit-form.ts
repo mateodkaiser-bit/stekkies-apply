@@ -70,7 +70,7 @@ export async function clickSubmit(page: any, log: string[]): Promise<string> {
 // visible. Best-effort: a false does NOT prove failure (some sites redirect),
 // so callers use it to ENRICH the result, not to override a successful click.
 const SENT_RE =
-  /bedankt|verzonden|verstuurd|succesvol|we nemen .*contact|thank you|has been sent|message sent|successfully sent|we(?:'| ha)ve received|your (?:message|request|enquiry|inquiry)/i;
+  /bedankt|verzonden|verstuurd|succesvol|gelukt|aanvraag is binnen|reactie is (?:verstuurd|verzonden|ontvangen)|we nemen .*contact|thank you|has been sent|message sent|successfully sent|we(?:'| ha)ve received|your (?:message|request|enquiry|inquiry)/i;
 
 export async function confirmSent(page: any): Promise<boolean> {
   try {
