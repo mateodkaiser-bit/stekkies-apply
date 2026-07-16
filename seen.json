@@ -36,16 +36,18 @@
     "8207606ada2f4a5eb4caa9f21cd613c7",
     "98948e5f9e7f4a56b27a6a54c07568c4",
     "a9eb868026044ad084cde6313d826a93",
-    "761ef918da6646b8927b1c31e49f5550"
+    "761ef918da6646b8927b1c31e49f5550",
+    "ecde28f53a45418daa01799b7427afde"
   ],
   "addresses": [
     "vandespiegelstraat19a",
     "regentesselaan",
     "houtzagerssingeldenhaag",
-    "bosschestraatdenhaag"
+    "bosschestraatdenhaag",
+    "gedempteslootdenhaag"
   ],
   "appliedToday": {
     "date": "2026-07-16",
-    "count": 2
+    "count": 3
   }
 }
