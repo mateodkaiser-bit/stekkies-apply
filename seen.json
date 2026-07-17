@@ -42,7 +42,9 @@
     "4a49583460ba47c7825f59830db115d0",
     "72559e1c78244b78a1397dfb969b264c",
     "c18b9f5c4378466496c319404578be21",
-    "fa8c5457bda4451f91055fe166fccd8f"
+    "fa8c5457bda4451f91055fe166fccd8f",
+    "34aed12e6c3a4943b7bd00cf562eec43",
+    "6b79538712464118aad93184e18c2880"
   ],
   "addresses": [
     "vandespiegelstraat19a",
@@ -53,6 +55,6 @@
   ],
   "appliedToday": {
     "date": "2026-07-17",
-    "count": 0
+    "count": 1
   }
 }
