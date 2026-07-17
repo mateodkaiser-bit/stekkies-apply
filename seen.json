@@ -47,7 +47,11 @@
     "6b79538712464118aad93184e18c2880",
     "49afe0e91fad4380b40bba81c36dd303",
     "a41b3ba5f61a4f368a23af83f48d085d",
-    "d5ccd258b6a44b79b6e7f281c18cd5f9"
+    "d5ccd258b6a44b79b6e7f281c18cd5f9",
+    "72b70659b0c948158af2bffb6b06f7c4",
+    "e15cc40bdea5402e92ec9ee0a420b7df",
+    "6399e672e5e443dcb407a09cf7d7f5f2",
+    "af528a33edc8424ba8802e6e87f71f36"
   ],
   "addresses": [
     "vandespiegelstraat19a",
@@ -55,10 +59,11 @@
     "houtzagerssingeldenhaag",
     "bosschestraatdenhaag",
     "gedempteslootdenhaag",
-    "beeklaandenhaag"
+    "beeklaandenhaag",
+    "tripstraatdenhaag"
   ],
   "appliedToday": {
     "date": "2026-07-17",
-    "count": 2
+    "count": 3
   }
 }
