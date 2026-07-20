@@ -21,6 +21,7 @@ import { applyVbo } from './apply-vbo.ts';
 import { applyForm } from './apply-form.ts';
 import { applyGeneric } from './apply-generic.ts';
 import { sendApplicationEmail } from './send-email.ts';
+import { confirmPendingOptIns } from './confirm-optin.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -44,7 +45,11 @@ const GATED: Record<string, string> = {
   vbtverhuurmakelaars: 'account/login required (register once to enable auto-apply)',
   wonennu: 'account/login required (register once to enable auto-apply)',
 };
-type Seen = { matchIds: string[]; addresses: string[]; appliedToday?: { date: string; count: number } };
+type Seen = { matchIds: string[]; addresses: string[]; appliedToday?: { date: string; count: number }; retries?: Record<string, number> };
+// Failures where the form was never reached/submitted, so retrying on a later
+// run is safe (no double-apply risk) and often succeeds (proxy IP roulette).
+const TRANSIENT = /blocked the load|time-?d? ?out|timeout|net::|ECONN|ETIMEDOUT|Target closed|browser has been closed/i;
+const MAX_RETRIES = 3;
 const loadSeen = (): Seen => (existsSync(SEEN) ? JSON.parse(readFileSync(SEEN, 'utf8')) : { matchIds: [], addresses: [] });
 const saveSeen = (s: Seen) => writeFileSync(SEEN, JSON.stringify(s, null, 2));
 
@@ -66,7 +71,7 @@ async function openMatchPage(matchUrl: string) {
 
 async function main() {
   const seen = loadSeen();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
   if (!seen.appliedToday || seen.appliedToday.date !== today) seen.appliedToday = { date: today, count: 0 };
   const emails = await fetchStekkiesMatches(30); // fetch enough to catch up on overnight backlog
 
@@ -83,6 +88,7 @@ async function main() {
   const summary: string[] = [];
   for (const mt of fresh) {
     let line = '';
+    let transient = false;
     try {
       const info = await openMatchPage(mt.redirectUrl);
       const price = mt.fields.priceEur ? `EUR ${mt.fields.priceEur}` : '';
@@ -123,13 +129,32 @@ async function main() {
         line = `${verb}: ${label} | ${r.reason || r.status}`;
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       }
-      // Only CONSUME a match (mark it seen) on a LIVE run. In DRY-RUN we are just
-      // testing: marking it seen here would burn a fresh listing so it never gets
-      // a real application. seen.json is only persisted below when LIVE too.
-      if (LIVE) seen.matchIds.push(mt.matchId);
+      transient = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && TRANSIENT.test(line);
     } catch (e) {
       line = `ERROR: ${mt.matchId} | ${(e as Error).message.slice(0, 60)}`;
-      if (LIVE) seen.matchIds.push(mt.matchId);
+      transient = TRANSIENT.test((e as Error).message);
+    }
+    // Only CONSUME a match (mark it seen) on a LIVE run. In DRY-RUN we are just
+    // testing: marking it seen here would burn a fresh listing so it never gets
+    // a real application. seen.json is only persisted below when LIVE too.
+    // Transient load/network failures are NOT consumed: they get MAX_RETRIES
+    // attempts across later runs (fresh proxy IPs each time) before giving up.
+    if (LIVE) {
+      if (!transient) {
+        seen.matchIds.push(mt.matchId);
+        if (seen.retries) delete seen.retries[mt.matchId];
+      } else {
+        seen.retries ??= {};
+        const n = (seen.retries[mt.matchId] ?? 0) + 1;
+        if (n >= MAX_RETRIES) {
+          seen.matchIds.push(mt.matchId);
+          delete seen.retries[mt.matchId];
+          line += ` | giving up after ${MAX_RETRIES} attempts`;
+        } else {
+          seen.retries[mt.matchId] = n;
+          line += ` | will retry next run (attempt ${n}/${MAX_RETRIES})`;
+        }
+      }
     }
     console.log(' -', line);
     summary.push(line);
@@ -138,6 +163,19 @@ async function main() {
       appendFileSync(join(__dirname, '..', 'logs', 'results.log'), `${new Date().toISOString()} ${line}\n`);
     } catch { /* non-fatal */ }
   }
+  // Complete any half-done applications: VBO/leadflow sends a "Bevestig jouw
+  // e-mail" double-opt-in after we submit; the lead only reaches the agent once
+  // that link is clicked. LIVE only, runs every time (confirmations arrive
+  // minutes after a submit, often landing between runs).
+  if (LIVE) {
+    try {
+      const n = await confirmPendingOptIns((m) => console.log('  optin:', m));
+      if (n) summary.push(`CONFIRMED: clicked ${n} email opt-in link(s) (leadflow/agency double opt-in)`);
+    } catch (e) {
+      console.log('opt-in confirm failed:', (e as Error).message);
+    }
+  }
+
   // Persist dedupe state only on LIVE runs. DRY-RUN must not write seen.json,
   // otherwise a test run consumes fresh matches and the daily cron never applies.
   if (LIVE) saveSeen(seen);
