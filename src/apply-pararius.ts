@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
-import { clickSubmit, confirmSent } from './submit-form.ts';
+import { clickSubmit, confirmSent, captureProof } from './submit-form.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -206,7 +206,7 @@ export async function applyPararius(
       const sub = await clickSubmit(page, log); // Dutch + English, cookie/login-safe
       await page.waitForTimeout(3000);
       const confirmed = sub ? await confirmSent(page) : false;
-      if (sub) log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)');
+      if (sub) { log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)'); await captureProof(page, opts.hint?.address || 'pararius', log); }
       try { await page.screenshot({ path: join(__dirname, '..', 'apply-pararius.png'), fullPage: false, timeout: 15_000 }); } catch { /* */ }
       result = sub ? { status: 'applied', reason: confirmed ? 'submitted (confirmed)' : 'submitted (no confirmation seen)', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log }
                    : { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };

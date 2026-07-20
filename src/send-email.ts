@@ -14,11 +14,13 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const user = process.env.GMAIL_USER!;
 const pass = process.env.GMAIL_APP_PASSWORD!;
+let profile: any = {};
 let fromName = 'Applicant';
 try {
-  const p = JSON.parse(readFileSync(join(__dirname, '..', 'profile.json'), 'utf8'));
-  fromName = `${p.applicants?.[0]?.firstName || ''} ${p.applicants?.[0]?.lastName || ''}`.trim() || 'Applicant';
+  profile = JSON.parse(readFileSync(join(__dirname, '..', 'profile.json'), 'utf8'));
+  fromName = `${profile.applicants?.[0]?.firstName || ''} ${profile.applicants?.[0]?.lastName || ''}`.trim() || 'Applicant';
 } catch { /* profile not present */ }
+
 
 export interface OutgoingEmail {
   to: string;
@@ -38,6 +40,16 @@ export function transport() {
 
 export async function sendApplicationEmail(mail: OutgoingEmail) {
   return transport().sendMail({ from: `${fromName} <${user}>`, ...mail });
+}
+
+// High-level: send a rental application to an agency's published contact email
+// (for "email the agent" listings that have no web form). Body is the tailored
+// letter. NEVER attach files to this first-contact email — documents go out only
+// on request, once a real person on the other side has replied. The letter
+// already offers to provide all supporting documents promptly.
+export async function sendListingApplication(opts: { to: string; letter: string; address?: string | null }) {
+  const subject = opts.address ? `Interesse in ${opts.address}` : 'Interesse in uw woning / Interested in your property';
+  return sendApplicationEmail({ to: opts.to, subject, text: opts.letter });
 }
 
 // ── live self-test: sends a real email to your own inbox with 2 docs attached ──

@@ -38,6 +38,11 @@ const normSite = (s?: string | null) => (s || '').toLowerCase().replace(/[^a-z]/
 const GATED: Record<string, string> = {
   schep: 'free MyProperty account required (register once to enable auto-apply)',
   myproperty: 'free MyProperty account required (register once to enable auto-apply)',
+  // Observed in the July logs to always demand "account or login required to
+  // submit". Short-circuit so we do not spend a Browserbase session just to hit
+  // the wall. Remove an entry once you register there and we save a Context.
+  vbtverhuurmakelaars: 'account/login required (register once to enable auto-apply)',
+  wonennu: 'account/login required (register once to enable auto-apply)',
 };
 type Seen = { matchIds: string[]; addresses: string[]; appliedToday?: { date: string; count: number } };
 const loadSeen = (): Seen => (existsSync(SEEN) ? JSON.parse(readFileSync(SEEN, 'utf8')) : { matchIds: [], addresses: [] });

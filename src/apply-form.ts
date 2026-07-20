@@ -15,7 +15,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
-import { clickSubmit, confirmSent } from './submit-form.ts';
+import { clickSubmit, confirmSent, captureProof } from './submit-form.ts';
+import { sendListingApplication } from './send-email.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -88,6 +89,35 @@ function selectorFor(f: any): string | null {
   return null;
 }
 
+// Find the agency's contact email on a listing that has no web form. Prefers
+// mailto: links (the agent's real address), then falls back to email-shaped text.
+// Skips vendor/no-reply noise and our own address so we never email ourselves.
+async function findContactEmail(page: any, selfEmail: string): Promise<string | null> {
+  const emails: string[] = await page.evaluate(() => {
+    const found: string[] = [];
+    for (const a of Array.from(document.querySelectorAll('a[href^="mailto:" i]'))) {
+      const e = (a as HTMLAnchorElement).href.replace(/^mailto:/i, '').split('?')[0].trim().toLowerCase();
+      if (e.includes('@')) found.push(e);
+    }
+    if (!found.length) {
+      const text = document.body ? document.body.innerText : '';
+      const re = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text))) found.push(m[0].toLowerCase());
+    }
+    return found;
+  });
+  const BAD = /noreply|no-reply|donotreply|do-not-reply|example\.(com|org|net)|sentry|wixpress|@wix|cloudflare|googlemail\.com$|@2x|\.png|\.jpg|webmaster|postmaster/i;
+  const self = (selfEmail || '').toLowerCase();
+  const seen = new Set<string>();
+  for (const e of emails) {
+    if (e === self || BAD.test(e) || seen.has(e)) continue;
+    seen.add(e);
+    return e; // first clean candidate; mailto links are scanned before body text
+  }
+  return null;
+}
+
 export async function applyForm(url: string, opts: { live?: boolean; hint?: Partial<ListingInfo>; contextId?: string } = {}): Promise<ApplyResult> {
   const LIVE = !!opts.live;
   const m = profile.applicants[0];
@@ -141,7 +171,26 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
     }
 
     if (!hasCore(mapped)) {
-      result = { status: 'needs_manual', reason: 'no fillable contact form found', letter, log };
+      // No web form: many agency listings just publish a contact email. Detect it
+      // and send the application by email instead of bailing to the vision agent.
+      const email = await findContactEmail(page, m.email);
+      if (email) {
+        if (LIVE) {
+          try {
+            const info = await sendListingApplication({ to: email, letter, address: opts.hint?.address });
+            log.push(`emailed application to ${email} (accepted: ${(info as any)?.accepted?.join(', ') || 'n/a'})`);
+            result = { status: 'applied', reason: `emailed application to ${email}`, letter, availableFrom: details.availableFrom, log };
+          } catch (e) {
+            log.push(`email send failed: ${(e as Error).message.slice(0, 80)}`);
+            result = { status: 'needs_manual', reason: `found agent email ${email} but send failed`, letter, log };
+          }
+        } else {
+          log.push(`would email application to ${email} (dry-run)`);
+          result = { status: 'dry_run', reason: `would email application to ${email}`, letter, availableFrom: details.availableFrom, log };
+        }
+      } else {
+        result = { status: 'needs_manual', reason: 'no fillable contact form found', letter, log };
+      }
     } else {
       const addr = profile.currentAddress || {};
       const values: Record<string, string> = {
@@ -195,7 +244,7 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
         const sub = await clickSubmit(page, log); // Dutch + English, cookie/login-safe
         await page.waitForTimeout(3000);
         const confirmed = sub ? await confirmSent(page) : false;
-        if (sub) log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)');
+        if (sub) { log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)'); await captureProof(page, opts.hint?.address || opts.hint?.sourceSite || 'form', log); }
         result = sub ? { status: 'applied', reason: confirmed ? 'submitted (confirmed)' : 'submitted (no confirmation seen)', letter, availableFrom: details.availableFrom, log }
                      : { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
       } else {
