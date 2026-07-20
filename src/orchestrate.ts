@@ -32,6 +32,15 @@ const LIVE = process.argv.includes('--live');
 const LIMIT = Number((process.argv.find((a) => a.startsWith('--limit=')) || '').split('=')[1] || 3);
 const MAX_PER_DAY = Number((process.argv.find((a) => a.startsWith('--maxday=')) || '').split('=')[1] || 12);
 
+// Surface applier diagnostics: print the step log (visible in the GitHub run
+// log) and append the Browserbase session replay URL to the result line so
+// every application is auditable from the summary email / results.log.
+const finishLine = (line: string, r: any): string => {
+  for (const l of r?.log || []) console.log('    ·', l);
+  const rp = (r?.log || []).filter((l: string) => typeof l === 'string' && l.startsWith('replay:')).pop();
+  return rp ? `${line} | ${rp.replace('replay: ', '')}` : line;
+};
+
 const normAddr = (a?: string | null) => (a || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const normSite = (s?: string | null) => (s || '').toLowerCase().replace(/[^a-z]/g, '');
 // Sites known to require an account/login. Short-circuited with a clean reason
@@ -108,7 +117,7 @@ async function main() {
           hint: { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city },
         });
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
-        line = `${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`;
+        line = finishLine(`${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`, r);
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       } else if (normSite(info.sourceSite) === 'vbo' || /vastgoednederland/i.test(info.sourceUrl || '')) {
         const r = await applyVbo(info.sourceUrl!, {
@@ -116,7 +125,7 @@ async function main() {
           hint: { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city },
         });
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
-        line = `${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`;
+        line = finishLine(`${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`, r);
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       } else {
         // Every other source: fast adaptive DOM filler, with the slow vision agent as a last resort.
@@ -126,7 +135,7 @@ async function main() {
           r = await applyGeneric(info.sourceUrl!, { live: LIVE, hint });
         }
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
-        line = `${verb}: ${label} | ${r.reason || r.status}`;
+        line = finishLine(`${verb}: ${label} | ${r.reason || r.status}`, r);
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       }
       transient = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && TRANSIENT.test(line);

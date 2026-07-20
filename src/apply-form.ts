@@ -43,7 +43,7 @@ async function freshSession(contextId?: string) {
   const ctx = browser.contexts()[0];
   await ctx.route('**/*', (r) => (['font', 'image', 'media'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
   const page = ctx.pages()[0] ?? (await ctx.newPage());
-  return { browser, ctx, page };
+  return { browser, ctx, page, sessionId: session.id as string };
 }
 
 // Read visible form fields straight from the DOM. No named inner functions (tsx/esbuild __name safe).
@@ -81,6 +81,39 @@ function classify(f: any): string | null {
   if (/voornaam|first.?name|given.?name/.test(s)) return 'firstName';
   if (/volledige naam|full.?name|uw naam|your name|\bnaam\b/.test(s)) return 'fullName';
   return null;
+}
+
+// Fallback field mapper: one cheap Gemini Flash call for fields the regex
+// heuristics could not classify (odd Dutch labels, agency-specific wording).
+// Returns an index-aligned array of roles (or null).
+const ROLES = ['firstName', 'lastName', 'fullName', 'initials', 'email', 'phone', 'message', 'street', 'houseNumber', 'postcode', 'city', 'country', 'consent'];
+export async function classifyWithGemini(fields: any[], log: string[]): Promise<(string | null)[]> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || !fields.length) return fields.map(() => null);
+  try {
+    const prompt = `These form fields were scraped from a rental-agency contact form (Dutch or English). For EACH field pick the single best role from: ${ROLES.join(', ')} — or null if none fits.
+Notes: "message" = the motivation/comments/question textarea. "consent" = a REQUIRED terms/privacy agreement checkbox only; newsletter or marketing opt-ins are null. Never guess: when unsure, use null.
+
+Fields (JSON, index-aligned):
+${JSON.stringify(fields.map((f, i) => ({ i, tag: f.tag, type: f.type, name: f.name, id: f.id, placeholder: f.placeholder, label: f.label, required: f.required })))}
+
+Return ONLY a JSON array of exactly ${fields.length} entries (role string or null), index-aligned.`;
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
+    });
+    const j: any = await res.json();
+    const arr = JSON.parse(j?.candidates?.[0]?.content?.parts?.[0]?.text || '[]');
+    if (!Array.isArray(arr)) return fields.map(() => null);
+    const out = fields.map((_, i) => (ROLES.includes(arr[i]) ? arr[i] : null));
+    const n = out.filter(Boolean).length;
+    if (n) log.push(`gemini mapped ${n} extra field(s): ${out.filter(Boolean).join(', ')}`);
+    return out;
+  } catch (e) {
+    log.push('gemini field-mapping failed: ' + (e as Error).message.slice(0, 60));
+    return fields.map(() => null);
+  }
 }
 
 function selectorFor(f: any): string | null {
@@ -127,10 +160,12 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
   let browser: any, ctx: any, page: any, loaded = false;
   for (let attempt = 1; attempt <= 3 && !loaded; attempt++) {
     try {
-      ({ browser, ctx, page } = await freshSession(opts.contextId));
+      let sessionId: string;
+      ({ browser, ctx, page, sessionId } = await freshSession(opts.contextId));
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
       loaded = true;
       log.push(`loaded on attempt ${attempt}`);
+      log.push(`replay: https://browserbase.com/sessions/${sessionId}`);
     } catch {
       log.push(`load attempt ${attempt} failed`);
       if (browser) await browser.close().catch(() => {});
@@ -168,6 +203,14 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
         mapped = (await scanFields(page)).map((f) => ({ f, cls: classify(f) }));
         if (hasCore(mapped)) { log.push(`form revealed via "${t}"`); break; }
       }
+    }
+
+    // Heuristics missed fields? One Gemini call maps the leftovers before we
+    // give up, fall back to email, or bail to the slow vision agent.
+    if (mapped.some((x) => !x.cls) && (!hasCore(mapped) || mapped.some((x) => !x.cls && x.f.required))) {
+      const idx = mapped.map((x, i) => (!x.cls ? i : -1)).filter((i) => i >= 0);
+      const roles = await classifyWithGemini(idx.map((i) => mapped[i].f), log);
+      idx.forEach((mi, k) => { if (roles[k]) mapped[mi].cls = roles[k]; });
     }
 
     if (!hasCore(mapped)) {

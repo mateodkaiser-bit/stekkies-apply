@@ -57,7 +57,7 @@ async function freshSession() {
   const ctx = browser.contexts()[0];
   await ctx.route('**/*', (r) => (['font', 'image', 'media'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
   const page = ctx.pages()[0] ?? (await ctx.newPage());
-  return { browser, ctx, page };
+  return { browser, ctx, page, sessionId: session.id as string };
 }
 
 export async function applyPararius(
@@ -73,7 +73,9 @@ export async function applyPararius(
   let browser: any, ctx: any, page: any, loaded = false;
   for (let attempt = 1; attempt <= 3 && !loaded; attempt++) {
     try {
-      ({ browser, ctx, page } = await freshSession());
+      let sessionId: string;
+      ({ browser, ctx, page, sessionId } = await freshSession());
+      log.push(`replay: https://browserbase.com/sessions/${sessionId}`);
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 }); // fail fast on blocked IPs
       loaded = true;
       log.push(`loaded on attempt ${attempt}`);

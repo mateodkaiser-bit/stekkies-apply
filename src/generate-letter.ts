@@ -43,6 +43,17 @@ function applicantFacts(): string {
 
 const stripEmDashes = (s: string) => s.replace(/\s*[—–]\s*/g, ', ').replace(/ ,/g, ',').replace(/,,/g, ',');
 
+// A letter that fails any of these would hurt the application: leftover
+// [placeholders], a missing/mangled sign-off, or a wildly off length.
+function letterProblems(letter: string, signOff: string): string | null {
+  if (/[\[\]{}<>]/.test(letter)) return 'contains placeholder brackets';
+  const words = letter.split(/\s+/).length;
+  if (words < 90 || words > 260) return `bad length (${words} words)`;
+  if (!letter.includes(signOff)) return 'missing sign-off';
+  if (!/^dear/i.test(letter.trim())) return 'missing salutation';
+  return null;
+}
+
 export async function generateLetter(listing: ListingInfo): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return stripEmDashes((profile.responseLetterOverride || '').trim());
@@ -77,23 +88,29 @@ CUSTOMISE:
 
 Return ONLY the letter text, no preamble.`;
 
-  try {
-    const res = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-      {
-        method: 'POST',
-        headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.6 } }),
-      },
-    );
-    const j: any = await res.json();
-    const text: string | undefined = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('empty response: ' + JSON.stringify(j).slice(0, 200));
-    return stripEmDashes(text.trim());
-  } catch (e) {
-    console.error('letter generation failed, using fallback:', (e as Error).message);
-    return stripEmDashes((profile.responseLetterOverride || '').trim());
+  // Up to 2 attempts; a letter failing the quality checks never goes out.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+        {
+          method: 'POST',
+          headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.6 } }),
+        },
+      );
+      const j: any = await res.json();
+      const text: string | undefined = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('empty response: ' + JSON.stringify(j).slice(0, 200));
+      const letter = stripEmDashes(text.trim());
+      const problem = letterProblems(letter, signOff);
+      if (!problem) return letter;
+      console.error(`letter QC failed (attempt ${attempt}): ${problem}`);
+    } catch (e) {
+      console.error(`letter generation failed (attempt ${attempt}):`, (e as Error).message);
+    }
   }
+  return stripEmDashes((profile.responseLetterOverride || '').trim());
 }
 
 // ── test: generate for a sample Den Haag listing ──

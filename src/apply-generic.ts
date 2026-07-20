@@ -29,8 +29,10 @@ export interface GenericResult {
 function applicantSummary(): string {
   const [mateo, carlotta] = profile.applicants;
   const f = profile.financials || {};
+  // Dutch 06-format phone: sites like Funda/vb&t reject "+31 6 ..." as invalid.
+  const phone = String(mateo.phone || '').replace(/^\+31\s?/, '0').replace(/\s/g, '');
   return [
-    `First applicant: ${mateo.firstName} ${mateo.lastName}, ${mateo.nationality}, born ${mateo.dob}, email ${mateo.email}, phone ${mateo.phone}, ${mateo.occupation}.`,
+    `First applicant: ${mateo.firstName} ${mateo.lastName}, ${mateo.nationality}, born ${mateo.dob}, email ${mateo.email}, phone ${phone}, ${mateo.occupation}.`,
     `Second applicant: ${carlotta.firstName} ${carlotta.lastName}, ${carlotta.nationality}, born ${carlotta.dob}, ${carlotta.occupation}.`,
     `Household: a couple, 2 tenants, no children, no pets, non-smokers.`,
     `Income: ${mateo.firstName} earns about EUR ${f.grossMonthlyIncomeEur || 4000}/month (self-employed). Guarantor: ${f.guarantor?.relation} (${f.guarantor?.basis}), living abroad (Germany).`,
@@ -61,6 +63,8 @@ export async function applyGeneric(
   });
   if (opts.contextId) log.push('using saved login');
   await stagehand.init();
+  const sid = (stagehand as any).browserbaseSessionID;
+  if (sid) log.push(`replay: https://browserbase.com/sessions/${sid}`);
   const page: any = stagehand.context.pages()[0] ?? (await stagehand.context.newPage());
   let result: GenericResult = { status: 'error', log };
 
