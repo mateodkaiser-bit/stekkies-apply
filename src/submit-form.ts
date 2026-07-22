@@ -116,17 +116,114 @@ export async function captureProof(page: any, tag: string, log: string[]): Promi
   } catch { /* non-fatal */ }
 }
 
-// After clicking submit, confirm the form actually went through instead of just
-// trusting the click. Rental sites show a thank-you / "bericht verstuurd" state
-// (Dutch or English) or clear the form. Returns true when a success signal is
-// visible. Best-effort: a false does NOT prove failure (some sites redirect),
-// so callers use it to ENRICH the result, not to override a successful click.
-const SENT_RE =
-  /bedankt|verzonden|verstuurd|succesvol|gelukt|aanvraag is binnen|reactie is (?:verstuurd|verzonden|ontvangen)|we nemen .*contact|thank you|has been sent|message sent|successfully sent|we(?:'| ha)ve received|your (?:message|request|enquiry|inquiry)/i;
+// ────────────────────────────────────────────────────────────────────────────
+// Submission VERIFICATION.
+//
+// The old behaviour trusted a successful button click as "applied" and only used
+// confirmation text to reword the reason. That produced FALSE positives: a form
+// that silently failed validation (required consent unticked, a field empty), or
+// a submit POST that hit a 403/WAF block, was still logged as "submitted". Two
+// sampled proofs confirmed it — an empty VBO form and a bare "403 Forbidden".
+//
+// verifySubmission() instead POLLS the page after submit and returns a verdict:
+//   - 'confirmed' : a real success signal appeared (thank-you text, or a redirect
+//                   to a bedankt/success URL).
+//   - 'failed'    : a hard negative appeared (403/blocked/error page, or a visible
+//                   validation error while the form is still on screen).
+//   - 'uncertain' : neither — the click happened but we cannot prove delivery.
+// Callers mark ONLY 'confirmed' as applied; everything else is needs_manual so a
+// human can verify, and nothing is reported as sent that we cannot stand behind.
+// ────────────────────────────────────────────────────────────────────────────
 
+// Strict success signals. These require a completion verb ("has been sent",
+// "reactie is verzonden", "bedankt voor je reactie") so a bare field LABEL like
+// "Your message" on the un-submitted form never counts as a confirmation.
+const CONFIRM_RE =
+  /bedankt voor (?:je|jouw|uw)|hartelijk dank|dank voor (?:je|jouw|uw) (?:bericht|reactie|aanvraag|interesse)|reactie is (?:verstuurd|verzonden|ontvangen|binnen)|bericht is (?:verstuurd|verzonden|ontvangen)|aanvraag is (?:verstuurd|verzonden|ontvangen|binnen)|succesvol (?:verzonden|verstuurd|ontvangen|ingediend)|we nemen (?:zo snel mogelijk |z\.s\.m\.? )?contact|thank you for (?:your|contacting|reaching|getting)|your (?:message|request|enquiry|inquiry|reaction|response|application) (?:has been|was) (?:sent|received|submitted|forwarded)|has been (?:sent|received|submitted) successfully|message (?:has been )?sent|successfully (?:sent|submitted|received)|we(?:'ve| have) received your/i;
+
+// A blocked / error page (WAF, proxy IP ban, rate limit, Cloudflare challenge).
+// Matched only on SHORT bodies / the title so a stray "forbidden" in a full
+// listing's footer does not trip it.
+const ERROR_PAGE_RE =
+  /\b40[13]\b|forbidden|access denied|not authorized|unauthorized|\b429\b|too many requests|rate limit|just a moment|attention required|verify you are (?:a )?human|checking your browser|error 1020/i;
+
+// A client-side validation error keeping the form on screen (submit rejected).
+const VALIDATION_RE =
+  /is verplicht|verplicht veld|vul (?:dit|alle|het) .*in|dit veld is|graag invullen|selecteer|akkoord met de voorwaarden|geef .*toestemming|required field|this field is required|please (?:fill|enter|complete|accept|check|agree|tick)|is required|invalid email|ongeldig|voer .*in/i;
+
+// A URL that indicates a post-submit success/redirect.
+const SUCCESS_URL_RE = /bedankt|dank|thank|thanks|success|geslaagd|verzonden|verstuurd|confirmation|bevestig|received|\/sent\b|\/done\b/i;
+
+export type SubmitVerdict = 'confirmed' | 'failed' | 'uncertain';
+
+// Gather visible text across the main frame AND every child iframe (rental
+// contact forms — and their thank-you state — are often inside an iframe), plus
+// the document title and URL.
+async function pageSnapshot(page: any): Promise<{ text: string; title: string; url: string; len: number }> {
+  let text = '';
+  for (const frame of page.frames()) {
+    const t = await frame.evaluate(() => (document.body ? document.body.innerText : '')).catch(() => '');
+    if (t) text += '\n' + t;
+  }
+  const title = await page.title().catch(() => '');
+  let url = '';
+  try { url = page.url(); } catch { /* */ }
+  return { text, title, url, len: text.replace(/\s+/g, ' ').trim().length };
+}
+
+function isErrorPage(snap: { text: string; title: string; len: number }): string | null {
+  const hay = `${snap.title}\n${snap.text}`;
+  const m = hay.match(ERROR_PAGE_RE);
+  if (!m) return null;
+  // Only trust it on an error-page-shaped page: a short body, or the signal is in
+  // the <title>. Full listings that merely contain the word are not blocks.
+  if (snap.len < 800 || ERROR_PAGE_RE.test(snap.title)) return m[0];
+  return null;
+}
+
+function isSuccessUrl(url: string, urlBefore: string): boolean {
+  if (!url || url === urlBefore) return false;
+  try {
+    const u = new URL(url);
+    return SUCCESS_URL_RE.test(u.pathname + u.search);
+  } catch { return false; }
+}
+
+// Poll for up to ~timeoutMs after a submit click and classify the outcome.
+export async function verifySubmission(
+  page: any,
+  opts: { urlBefore: string; timeoutMs?: number } = { urlBefore: '' },
+): Promise<{ verdict: SubmitVerdict; detail: string }> {
+  const deadline = Date.now() + (opts.timeoutMs ?? 12_000);
+  let last: { text: string; title: string; url: string; len: number } = { text: '', title: '', url: '', len: 0 };
+  while (Date.now() < deadline) {
+    last = await pageSnapshot(page);
+    const err = isErrorPage(last);
+    if (err) return { verdict: 'failed', detail: `blocked/error page ("${err}")` };
+    if (CONFIRM_RE.test(last.text)) return { verdict: 'confirmed', detail: 'success message shown' };
+    if (isSuccessUrl(last.url, opts.urlBefore)) return { verdict: 'confirmed', detail: 'redirected to a confirmation page' };
+    await page.waitForTimeout(1200);
+  }
+  // Timed out with no positive signal. A visible validation error means the
+  // submit was rejected; otherwise we genuinely cannot tell (uncertain).
+  if (VALIDATION_RE.test(last.text)) return { verdict: 'failed', detail: 'form validation error (submit rejected)' };
+  return { verdict: 'uncertain', detail: 'no confirmation signal after submit' };
+}
+
+// True if a page load returned a blocking HTTP status (proxy IP ban / WAF).
+// goto() resolves on a 403 body, so callers must check the response explicitly.
+export function loadBlockedStatus(resp: any): number | null {
+  try {
+    const s = typeof resp?.status === 'function' ? resp.status() : null;
+    return s && s >= 400 ? s : null;
+  } catch { return null; }
+}
+
+// Back-compat shim (kept so any external caller still resolves); the appliers now
+// use verifySubmission. Best-effort single read, strict success signal only.
 export async function confirmSent(page: any): Promise<boolean> {
   try {
-    const txt: string = await page.evaluate(() => (document.body ? document.body.innerText : ''));
-    return SENT_RE.test(txt);
+    const snap = await pageSnapshot(page);
+    return CONFIRM_RE.test(snap.text);
   } catch { return false; }
 }

@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
-import { clickSubmit, confirmSent, captureProof } from './submit-form.ts';
+import { clickSubmit, verifySubmission, loadBlockedStatus, captureProof } from './submit-form.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -76,7 +76,9 @@ export async function applyPararius(
       let sessionId: string;
       ({ browser, ctx, page, sessionId } = await freshSession());
       log.push(`replay: https://browserbase.com/sessions/${sessionId}`);
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 }); // fail fast on blocked IPs
+      const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 }); // fail fast on blocked IPs
+      const blocked = loadBlockedStatus(resp); // goto() resolves on a 403 body -> check status, rotate IP if blocked
+      if (blocked) throw new Error(`http ${blocked}`);
       loaded = true;
       log.push(`loaded on attempt ${attempt}`);
     } catch (e) {
@@ -205,13 +207,21 @@ export async function applyPararius(
     catch { /* non-fatal */ }
 
     if (LIVE) {
+      const urlBefore = page.url();
       const sub = await clickSubmit(page, log); // Dutch + English, cookie/login-safe
-      await page.waitForTimeout(3000);
-      const confirmed = sub ? await confirmSent(page) : false;
-      if (sub) { log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)'); await captureProof(page, opts.hint?.address || 'pararius', log); }
-      try { await page.screenshot({ path: join(__dirname, '..', 'apply-pararius.png'), fullPage: false, timeout: 15_000 }); } catch { /* */ }
-      result = sub ? { status: 'applied', reason: confirmed ? 'submitted (confirmed)' : 'submitted (no confirmation seen)', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log }
-                   : { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
+      if (!sub) {
+        result = { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
+      } else {
+        await captureProof(page, opts.hint?.address || 'pararius', log);
+        try { await page.screenshot({ path: join(__dirname, '..', 'apply-pararius.png'), fullPage: false, timeout: 15_000 }); } catch { /* */ }
+        const v = await verifySubmission(page, { urlBefore }); // poll for a real success/failure signal
+        log.push(`verify: ${v.verdict} — ${v.detail}`);
+        result = v.verdict === 'confirmed'
+          ? { status: 'applied', reason: `submitted (confirmed: ${v.detail})`, letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log }
+          : v.verdict === 'failed'
+            ? { status: 'needs_manual', reason: `submit failed: ${v.detail}`, letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log }
+            : { status: 'needs_manual', reason: 'submitted but unconfirmed (verify manually)', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log };
+      }
     } else {
       result = { status: 'dry_run', letter, availableFrom: details.availableFrom, neighborhood: details.neighborhood, log };
     }

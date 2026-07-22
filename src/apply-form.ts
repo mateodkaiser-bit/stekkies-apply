@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
-import { clickSubmit, confirmSent, captureProof } from './submit-form.ts';
+import { clickSubmit, verifySubmission, loadBlockedStatus, captureProof } from './submit-form.ts';
 import { sendListingApplication } from './send-email.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -162,12 +162,16 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
     try {
       let sessionId: string;
       ({ browser, ctx, page, sessionId } = await freshSession(opts.contextId));
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+      log.push(`replay: https://browserbase.com/sessions/${sessionId}`);
+      const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+      // goto() resolves even on a 403 body, so a blocked proxy IP looks "loaded".
+      // Treat a 4xx/5xx main document as a failed load and rotate to a fresh IP.
+      const blocked = loadBlockedStatus(resp);
+      if (blocked) throw new Error(`http ${blocked}`);
       loaded = true;
       log.push(`loaded on attempt ${attempt}`);
-      log.push(`replay: https://browserbase.com/sessions/${sessionId}`);
-    } catch {
-      log.push(`load attempt ${attempt} failed`);
+    } catch (e) {
+      log.push(`load attempt ${attempt} failed: ${(e as Error).message.slice(0, 30)}`);
       if (browser) await browser.close().catch(() => {});
       browser = undefined;
     }
@@ -284,12 +288,21 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
       if (coreFilled === 0) {
         result = { status: 'needs_manual', reason: 'found a form but could not fill the key fields', letter, log };
       } else if (LIVE) {
+        const urlBefore = page.url();
         const sub = await clickSubmit(page, log); // Dutch + English, cookie/login-safe
-        await page.waitForTimeout(3000);
-        const confirmed = sub ? await confirmSent(page) : false;
-        if (sub) { log.push(confirmed ? 'confirmation state detected' : 'no confirmation text (may still have sent)'); await captureProof(page, opts.hint?.address || opts.hint?.sourceSite || 'form', log); }
-        result = sub ? { status: 'applied', reason: confirmed ? 'submitted (confirmed)' : 'submitted (no confirmation seen)', letter, availableFrom: details.availableFrom, log }
-                     : { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
+        const tag = opts.hint?.address || opts.hint?.sourceSite || 'form';
+        if (!sub) {
+          result = { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
+        } else {
+          await captureProof(page, tag, log);
+          const v = await verifySubmission(page, { urlBefore }); // poll for a real success/failure signal
+          log.push(`verify: ${v.verdict} — ${v.detail}`);
+          result = v.verdict === 'confirmed'
+            ? { status: 'applied', reason: `submitted (confirmed: ${v.detail})`, letter, availableFrom: details.availableFrom, log }
+            : v.verdict === 'failed'
+              ? { status: 'needs_manual', reason: `submit failed: ${v.detail}`, letter, availableFrom: details.availableFrom, log }
+              : { status: 'needs_manual', reason: 'submitted but unconfirmed (verify manually)', letter, availableFrom: details.availableFrom, log };
+        }
       } else {
         result = { status: 'dry_run', letter, availableFrom: details.availableFrom, log };
       }
