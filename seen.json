@@ -69,7 +69,8 @@
     "267f9f3c4d314817b1c5875afdf2dce4",
     "282748aeac684e82a1ddcae57aa15f51",
     "3e0d1d6096f5451282c8ac3116a9ad3b",
-    "e3b080310e4649a8b82fe8a5941c1a12"
+    "e3b080310e4649a8b82fe8a5941c1a12",
+    "5d789349288a4b73a21aa25560a599cc"
   ],
   "addresses": [
     "vandespiegelstraat19a",
@@ -80,10 +81,11 @@
     "beeklaandenhaag",
     "tripstraatdenhaag",
     "herderinnestraatdenhaag",
-    "bussumsestraatdenhaag"
+    "bussumsestraatdenhaag",
+    "hasseltsestraatdenhaag"
   ],
   "appliedToday": {
-    "date": "2026-07-21",
-    "count": 4
+    "date": "2026-07-22",
+    "count": 1
   }
 }
