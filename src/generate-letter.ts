@@ -36,7 +36,9 @@ function applicantFacts(): string {
     `They have lived in The Hague for ${t.yearsThere || 'two'} years, currently in ${profile.currentNeighbourhood || 'The Hague'} at ${t.address || 'their current home'}.`,
     hobbies ? `Hobbies: ${hobbies}.` : '',
     'Lifestyle: quiet, tidy, non-smokers, no pets, no children. Excellent reference from their current landlord.',
-    `Finances: ${a0.firstName} earns around EUR ${f.grossMonthlyIncomeEur || 4000} per month, plus a well-paid guarantor (${g.relation || 'a family guarantor'}, ${g.basis || 'stable income'}).`,
+    // Deliberately NO applicant income figure: affordability is presented as
+    // "students with a financially strong guarantor" (see the STRICT RULES).
+    `Finances: both applicants are students; the rent is comfortably secured by a financially strong guarantor (${g.relation || 'a family guarantor'}${g.basis ? ', ' + g.basis : ''}).`,
     "Documents ready: IDs, enrolment letters, current landlord's reference, and full guarantor documentation.",
   ].filter(Boolean).join('\n');
 }
@@ -68,6 +70,7 @@ STRICT RULES:
 - NEVER use em dashes or en dashes (— or –). Use commas, periods, or parentheses instead.
 - 130 to 190 words. Warm, sincere, specific, professional. Not over-the-top or gushing.
 - Do not invent facts that are not provided below. Do NOT state specific ages; you may say "in our mid-twenties".
+- NEVER state a salary, income, or any euro earnings amount for the applicants themselves. Present affordability ONLY as: we are students with a financially strong guarantor. (Describing the guarantor is fine; a number for the applicants is not.)
 - Begin with the salutation "Dear sir or madam,". NEVER use placeholder brackets like [Name] or [Address].
 - The named guarantor IS the guarantor (do not say they "provide" one).
 - End exactly with: "Kind regards, ${signOff}"
