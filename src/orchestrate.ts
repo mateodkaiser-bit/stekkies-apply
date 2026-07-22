@@ -95,11 +95,16 @@ async function main() {
   console.log(`${matches.length} matches found, ${fresh.length} fresh to process (limit ${LIMIT}). Mode: ${LIVE ? 'LIVE' : 'DRY-RUN'}\n`);
 
   const summary: string[] = [];
+  // Structured record per listing so the notification email can lead with the
+  // street address and the listing link (not just the terse results.log line).
+  type Entry = { status: string; address: string | null; url: string; site: string; price: string; raw: string };
+  const entries: Entry[] = [];
   for (const mt of fresh) {
     let line = '';
     let transient = false;
+    let info: any = null;
     try {
-      const info = await openMatchPage(mt.redirectUrl);
+      info = await openMatchPage(mt.redirectUrl);
       const price = mt.fields.priceEur ? `EUR ${mt.fields.priceEur}` : '';
       const label = `${info.address || mt.matchId} (${info.sourceSite || '?'}, ${price})`;
 
@@ -167,6 +172,17 @@ async function main() {
     }
     console.log(' -', line);
     summary.push(line);
+    // Always record the resolved street address and the real listing link (fall
+    // back to the Stekkies redirect, which still resolves to the listing) so the
+    // email can surface them prominently.
+    entries.push({
+      status: line.split(':')[0].trim(),
+      address: info?.address || null,
+      url: info?.sourceUrl || mt.redirectUrl || '',
+      site: info?.sourceSite || '?',
+      price: mt.fields.priceEur ? `EUR ${mt.fields.priceEur}` : '',
+      raw: line,
+    });
     try {
       mkdirSync(join(__dirname, '..', 'logs'), { recursive: true });
       appendFileSync(join(__dirname, '..', 'logs', 'results.log'), `${new Date().toISOString()} ${line}\n`);
@@ -176,10 +192,11 @@ async function main() {
   // e-mail" double-opt-in after we submit; the lead only reaches the agent once
   // that link is clicked. LIVE only, runs every time (confirmations arrive
   // minutes after a submit, often landing between runs).
+  let optinNote = '';
   if (LIVE) {
     try {
       const n = await confirmPendingOptIns((m) => console.log('  optin:', m));
-      if (n) summary.push(`CONFIRMED: clicked ${n} email opt-in link(s) (leadflow/agency double opt-in)`);
+      if (n) { optinNote = `CONFIRMED: clicked ${n} email opt-in link(s) (leadflow/agency double opt-in)`; summary.push(optinNote); }
     } catch (e) {
       console.log('opt-in confirm failed:', (e as Error).message);
     }
@@ -190,10 +207,26 @@ async function main() {
   if (LIVE) saveSeen(seen);
   else console.log('DRY-RUN: not persisting seen.json (no matches consumed).');
 
-  if (summary.length) {
-    const body = `Stekkies auto-apply run (${LIVE ? 'LIVE' : 'DRY-RUN'}):\n\n${summary.join('\n')}\n`;
+  if (entries.length || optinNote) {
+    // Notification email: each listing leads with its STREET ADDRESS and a
+    // clickable LISTING LINK on their own lines, then the site/price/outcome.
+    const ICON: Record<string, string> = { APPLIED: '✅', DRY_RUN_OK: '📝', NEEDS_MANUAL: '⚠️', SKIPPED: '⏭️', ERROR: '❌' };
+    const block = (e: Entry): string => {
+      const head = `${ICON[e.status] || '•'} ${e.status}: ${e.address || '(street address not resolved)'}`;
+      const meta = [e.site !== '?' ? e.site : '', e.price].filter(Boolean).join(' · ');
+      // Everything after "STATUS: label" in the raw line = the outcome/reason (+ replay url).
+      const detail = e.raw.split(' | ').slice(1).join(' | ');
+      const metaLine = [meta, detail].filter(Boolean).join(' · ');
+      return [head, `   Listing: ${e.url || '(no link)'}`, metaLine ? `   ${metaLine}` : ''].filter(Boolean).join('\n');
+    };
+    const applied = entries.filter((e) => e.status === 'APPLIED').length;
+    const body =
+      `Stekkies auto-apply run (${LIVE ? 'LIVE' : 'DRY-RUN'}) — ${entries.length} listing(s) processed, ${applied} applied\n\n` +
+      entries.map(block).join('\n\n') +
+      (optinNote ? `\n\n${optinNote}` : '') + '\n';
+    const subject = `[Homemaker] ${applied ? `applied to ${applied} listing(s)` : `processed ${entries.length} listing(s)`}`;
     try {
-      await sendApplicationEmail({ to: process.env.GMAIL_USER!, subject: `[Homemaker] processed ${summary.length} listing(s)`, text: body });
+      await sendApplicationEmail({ to: process.env.GMAIL_USER!, subject, text: body });
       console.log('\nSummary emailed to you.');
     } catch (e) {
       console.log('\nemail failed:', (e as Error).message);
