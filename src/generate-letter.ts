@@ -21,19 +21,37 @@ export interface ListingInfo {
   availableFrom?: string; // e.g. "1 August 2026" or "per direct"
   description?: string; // the full listing description text
   sourceSite?: string;
+  studentOnly?: boolean; // explicit override; otherwise auto-detected from the description
 }
 
-// Stable facts about the applicants, drawn from the profile.
-function applicantFacts(): string {
+// Student-only / limited-tenancy housing (campuscontract, jongerencontract,
+// "studentenwoning", "students only"). These homes are for people COMING to
+// study, so the letter must present the applicants as moving to The Hague for
+// their studies rather than as long-term residents.
+const STUDENT_ONLY_RE =
+  /studenten(?:woning|kamer|huisvesting|complex|contract)|campus\s?contract|jongeren(?:contract|woning)|youth contract|students?\s*[- ]?\s*(?:only|housing|accommodation|residence)|only\s+(?:for\s+)?students|(?:alleen|enkel|uitsluitend)\s+(?:voor\s+)?studenten|voor studenten|met een studenten/i;
+
+export function isStudentOnly(listing: Pick<ListingInfo, 'description' | 'address' | 'studentOnly'>): boolean {
+  if (typeof listing.studentOnly === 'boolean') return listing.studentOnly;
+  return STUDENT_ONLY_RE.test(`${listing.description || ''} ${listing.address || ''}`);
+}
+
+// Stable facts about the applicants, drawn from the profile. When the listing is
+// student-only, the residence line flips: they are MOVING to The Hague to study,
+// not already living there.
+function applicantFacts(studentOnly: boolean): string {
   const a = profile.applicants || [];
   const a0 = a[0] || {}; const a1 = a[1] || {};
   const f = profile.financials || {}; const g = f.guarantor || {};
   const t = profile.currentTenancy || {};
   const hobbies = [a0.hobby ? `${a0.firstName}: ${a0.hobby}` : '', a1.hobby ? `${a1.firstName}: ${a1.hobby}` : ''].filter(Boolean).join('; ');
+  const residence = studentOnly
+    ? 'They are relocating to The Hague for their Master\'s studies and do NOT currently live in the city. (A reference from their current landlord is still available.)'
+    : `They have lived in The Hague for ${t.yearsThere || 'two'} years, currently in ${profile.currentNeighbourhood || 'The Hague'} at ${t.address || 'their current home'}.`;
   return [
     `Applicants: ${a0.firstName} ${a0.lastName} (${a0.nationality}) and ${a1.firstName} ${a1.lastName} (${a1.nationality}), a couple in their mid-twenties.`,
     `${a1.firstName} is a ${a1.occupation}${a1.institution ? ` at ${a1.institution}` : ''}. ${a0.firstName} is a ${a0.occupation}${a0.institution ? ` at ${a0.institution}` : ''}.`,
-    `They have lived in The Hague for ${t.yearsThere || 'two'} years, currently in ${profile.currentNeighbourhood || 'The Hague'} at ${t.address || 'their current home'}.`,
+    residence,
     hobbies ? `Hobbies: ${hobbies}.` : '',
     'Lifestyle: quiet, tidy, non-smokers, no pets, no children. Excellent reference from their current landlord.',
     // Deliberately NO applicant income figure: affordability is presented as
@@ -62,6 +80,7 @@ export async function generateLetter(listing: ListingInfo): Promise<string> {
 
   const ap = profile.applicants || [];
   const signOff = `${ap[1]?.firstName || ''} ${ap[1]?.lastName || ''} and ${ap[0]?.firstName || ''} ${ap[0]?.lastName || ''}`.replace(/\s+/g, ' ').trim();
+  const studentOnly = isStudentOnly(listing);
 
   const prompt = `Write a short rental viewing-application letter for a couple applying for an apartment in the Netherlands.
 
@@ -76,7 +95,7 @@ STRICT RULES:
 - End exactly with: "Kind regards, ${signOff}"
 
 APPLICANTS:
-${applicantFacts()}
+${applicantFacts(studentOnly)}
 
 THIS LISTING:
 - Address: ${listing.address || 'n/a'}${listing.neighborhood ? `, neighbourhood: ${listing.neighborhood}` : ''}, ${listing.city || 'The Hague'}
@@ -86,7 +105,9 @@ THIS LISTING:
 
 CUSTOMISE:
 - Move-in timing: if an available-from date is given, say that timing suits us well and reference it naturally. NEVER mention a different or conflicting date. If no date is given, say we are flexible on the move-in date.
-- Neighbourhood: if this listing's neighbourhood is very close to where the applicants currently live (their current area is stated in the applicant facts above), express genuine, specific enthusiasm for staying in an area they already know and love. Otherwise keep neighbourhood mentions light and honest.
+${studentOnly
+  ? '- STUDENT HOUSING (this listing is offered to students only / limited tenancy): present the applicants as MOVING to The Hague for their Master\'s studies. Do NOT say they already live in The Hague, do NOT claim familiarity with the neighbourhood, and do NOT say they want to "stay" in an area they know. Express genuine enthusiasm for relocating to the city and the neighbourhood as new residents.'
+  : '- Neighbourhood: if this listing\'s neighbourhood is very close to where the applicants currently live (their current area is stated in the applicant facts above), express genuine, specific enthusiasm for staying in an area they already know and love. Otherwise keep neighbourhood mentions light and honest.'}
 - Optionally reference one or two concrete details from the description if they genuinely fit.
 
 Return ONLY the letter text, no preamble.`;
