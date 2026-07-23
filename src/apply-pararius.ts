@@ -177,7 +177,16 @@ export async function applyPararius(
       }
       log.push(`fail ${name}`);
     };
+    // Only disclose income when the field is REQUIRED to submit; otherwise omit it
+    // (preference: present affordability via the guarantor, not an income figure).
+    const isRequired = async (name: string): Promise<boolean> => {
+      try {
+        return await page.locator(`select[name="${F}[${name}]"]`).first()
+          .evaluate((el: any) => !!el.required || el.getAttribute('aria-required') === 'true');
+      } catch { return false; }
+    };
     const setIncome = async () => {
+      if (!(await isRequired('gross_annual_household_income'))) { log.push('skip income (optional — omitting per preference)'); return; }
       const opts = await getOptions('gross_annual_household_income');
       const target = 4000;
       const scored = opts.filter((o) => o.v).map((o) => ({ o, nums: (o.t.match(/\d[\d.]*/g) || []).map((s) => parseInt(s.replace(/\./g, ''), 10)).filter((x) => x > 100) }));
