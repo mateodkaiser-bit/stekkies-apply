@@ -58,7 +58,7 @@ async function scanFields(page: any): Promise<any[]> {
       const id = el.id || '';
       const lbl = id ? document.querySelector('label[for="' + (window as any).CSS.escape(id) + '"]') : null;
       const label = ((lbl ? lbl.textContent : '') || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
-      out.push({ tag: el.tagName.toLowerCase(), type, name: el.name || '', id, placeholder: el.placeholder || '', autocomplete: el.getAttribute('autocomplete') || '', label: label.slice(0, 60), required: !!el.required });
+      out.push({ tag: el.tagName.toLowerCase(), type, name: el.name || '', id, placeholder: el.placeholder || '', autocomplete: el.getAttribute('autocomplete') || '', label: label.slice(0, 60), required: !!el.required, ariaInvalid: el.getAttribute('aria-invalid') === 'true' });
     }
     return out;
   });
@@ -144,6 +144,68 @@ async function fillText(page: any, sel: string, value: string, short: boolean): 
     else await loc.fill(value, { timeout: 6000 });
   } catch { /* give up */ }
   return (await readBack()).length > 0;
+}
+
+const CB_NOISE_RE = /nieuwsbrief|newsletter|aanbieding|mailing|marketing|reclame|op de hoogte|promot|honeypot|\bhp[_-]|nickname|\bwebsite\b|\burl\b/;
+const CB_CONSENT_RE = /akkoord|toestemming|voorwaard|privacy|gegevens|persoonsgegevens|\bagree\b|consent|\bterms\b|policy|declaration|verwerk|ga akkoord/;
+
+// Tick a consent/agreement checkbox. Decides from the LABEL, not visibility or
+// the DOM `required` flag (agencies mark consent required only with a visual "*"
+// and hide the real <input> behind a custom-styled label). Skips only clear
+// marketing/newsletter/honeypot boxes. Tries native check, forced check, a
+// label-click, then a JS click that fires the change event a framework listens to.
+async function tickCheckbox(page: any, f: any, sel: string, log: string[]): Promise<'ticked' | 'skipped' | 'failed'> {
+  const cb = page.locator(sel).first();
+  const lbl = `${f.label} ${f.name} ${f.id} ${f.placeholder}`.toLowerCase();
+  if (CB_NOISE_RE.test(lbl) && !CB_CONSENT_RE.test(lbl)) { log.push('skip marketing/noise checkbox'); return 'skipped'; }
+  if (await cb.isChecked().catch(() => false)) return 'ticked';
+  for (const how of ['check', 'force', 'label', 'js'] as const) {
+    try {
+      if (how === 'check') await cb.check({ timeout: 2000 });
+      else if (how === 'force') await cb.check({ force: true, timeout: 2000 });
+      else if (how === 'label') { if (!f.id) continue; await page.locator(`label[for="${(f.id as string).replace(/([^\w-])/g, '\\$1')}"]`).first().click({ timeout: 2000, force: true }); }
+      else await cb.evaluate((el: any) => { if (!el.checked) el.click(); if (!el.checked) { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); } });
+      if (await cb.isChecked().catch(() => false)) { log.push(`ok consent (${how})`); return 'ticked'; }
+    } catch { /* next strategy */ }
+  }
+  log.push('fail consent');
+  return 'failed';
+}
+
+// Reactive recovery after a validation-rejected submit: re-scan the form and fix
+// what is actually wrong — an unticked required/consent checkbox, an empty
+// required text field, or an unselected required dropdown (and anything the form
+// flagged aria-invalid). Returns whether it changed anything worth resubmitting.
+async function recoverRequiredFields(page: any, values: Record<string, string>, log: string[]): Promise<boolean> {
+  let changed = false;
+  const fields = await scanFields(page).catch(() => [] as any[]);
+  for (const f of fields) {
+    const sel = selectorFor(f);
+    if (!sel) continue;
+    const cls = classify(f);
+    const attention = f.required || f.ariaInvalid;
+    try {
+      if (f.type === 'checkbox') {
+        if (cls === 'consent' || attention) {
+          const checked = await page.locator(sel).first().isChecked().catch(() => true);
+          if (!checked && (await tickCheckbox(page, f, sel, log)) === 'ticked') changed = true;
+        }
+      } else if (f.tag === 'select') {
+        if (attention) {
+          const val = await page.locator(sel).first().inputValue().catch(() => '');
+          if (!val) {
+            const opts: any[] = await page.locator(sel).locator('option').evaluateAll((os: any) => os.map((o: any) => ({ v: o.value, t: (o.textContent || '').trim() })));
+            const pick = opts.find((o) => o.v && /bezichtig|interesse|informatie|viewing|contact|huur|woning|\bja\b|man|vrouw|heer|mevrouw/i.test(o.t)) || opts.find((o) => o.v && o.t);
+            if (pick) { await page.selectOption(sel, pick.v).catch(() => {}); log.push(`recover select ${f.label || f.name}`); changed = true; }
+          }
+        }
+      } else if (cls && attention && values[cls]) {
+        const val = await page.locator(sel).first().inputValue().catch(() => '');
+        if (!val.trim() && (await fillText(page, sel, values[cls], cls !== 'message'))) { log.push(`recover fill ${cls}`); changed = true; }
+      }
+    } catch { /* skip this field */ }
+  }
+  return changed;
 }
 
 // Find the agency's contact email on a listing that has no web form. Prefers
@@ -282,33 +344,7 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
             const pick = optlist.find((o) => o.v && /bezichtig|interesse|informatie|viewing|contact|huur|woning/i.test(o.t)) || optlist.find((o) => o.v && o.t);
             if (pick) { await page.selectOption(sel, pick.v); log.push(`ok select ${f.label || f.name}`); }
           } else if (cls === 'consent') {
-            const cb = page.locator(sel).first();
-            // Decide whether to tick from the LABEL, not from visibility or the
-            // DOM `required` flag: agencies mark consent required only visually
-            // (a "*") and hide the real <input> behind a custom-styled label, so
-            // the box looks "hidden, not required" in the DOM yet MUST be ticked
-            // (this was the VBO/Woonzeker validation-failure bug). Skip only what
-            // is clearly marketing/newsletter or a honeypot trap.
-            const lbl = `${f.label} ${f.name} ${f.id} ${f.placeholder}`.toLowerCase();
-            const NOISE_RE = /nieuwsbrief|newsletter|aanbieding|mailing|marketing|reclame|op de hoogte|promot|honeypot|\bhp[_-]|nickname|\bwebsite\b|\burl\b/;
-            const CONSENT_RE = /akkoord|toestemming|voorwaard|privacy|gegevens|persoonsgegevens|\bagree\b|consent|\bterms\b|policy|declaration|verwerk|ga akkoord/;
-            if (NOISE_RE.test(lbl) && !CONSENT_RE.test(lbl)) { log.push('skip marketing/noise checkbox'); }
-            else {
-              let ticked = false;
-              // Try, in order: native check, forced check, click the label, and a
-              // JS click that bypasses visibility/pointer-events and fires the
-              // native change event a React/Vue validator listens to.
-              for (const how of ['check', 'force', 'label', 'js'] as const) {
-                try {
-                  if (how === 'check') await cb.check({ timeout: 2000 });
-                  else if (how === 'force') await cb.check({ force: true, timeout: 2000 });
-                  else if (how === 'label') { if (!f.id) continue; await page.locator(`label[for="${(f.id as string).replace(/([^\w-])/g, '\\$1')}"]`).first().click({ timeout: 2000, force: true }); }
-                  else await cb.evaluate((el: any) => { if (!el.checked) el.click(); if (!el.checked) { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); } });
-                  if (await cb.isChecked().catch(() => false)) { ticked = true; log.push(`ok consent (${how})`); break; }
-                } catch { /* next strategy */ }
-              }
-              if (!ticked) log.push('fail consent');
-            }
+            await tickCheckbox(page, f, sel, log);
           } else if (cls) {
             const okFill = await fillText(page, sel, values[cls], cls !== 'message');
             log.push(`${okFill ? 'ok' : 'fail'} ${cls}`);
@@ -333,8 +369,24 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
           result = { status: 'needs_manual', reason: 'filled but no submit button found', letter, log };
         } else {
           await captureProof(page, tag, log);
-          const v = await verifySubmission(page, { urlBefore }); // poll for a real success/failure signal
+          let v = await verifySubmission(page, { urlBefore }); // poll for a real success/failure signal
           log.push(`verify: ${v.verdict} — ${v.detail}`);
+          // Reactive recovery: a validation rejection usually means one required
+          // field slipped through (empty field or unticked consent). Fix what is
+          // actually wrong and resubmit ONCE before giving up.
+          if (v.verdict === 'failed' && /validation/i.test(v.detail)) {
+            if (await recoverRequiredFields(page, values, log)) {
+              log.push('recovery: fixed required field(s), resubmitting');
+              const sub2 = await clickSubmit(page, log);
+              if (sub2) {
+                await captureProof(page, `${tag}-retry`, log);
+                v = await verifySubmission(page, { urlBefore });
+                log.push(`verify (after recovery): ${v.verdict} — ${v.detail}`);
+              }
+            } else {
+              log.push('recovery: nothing fixable found');
+            }
+          }
           result = v.verdict === 'confirmed'
             ? { status: 'applied', reason: `submitted (confirmed: ${v.detail})`, letter, availableFrom: details.availableFrom, log }
             : v.verdict === 'failed'
