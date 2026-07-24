@@ -70,7 +70,10 @@ function classify(f: any): string | null {
   if (f.tag === 'textarea' || /bericht|message|motivat|opmerking|toelichting|vraag|comment/.test(s)) return 'message';
   if (f.type === 'email' || /e-?mail/.test(s)) return 'email';
   if (f.type === 'tel' || /telefoon|phone|mobiel|\btel\b|gsm/.test(s)) return 'phone';
-  if (f.type === 'checkbox' && /akkoord|privacy|voorwaarden|toestemming|agree|consent|policy/.test(s)) return 'consent';
+  // Any REQUIRED checkbox on a contact form is a precondition to submit (terms /
+  // privacy / "the above is correct") and is safe to tick, even if its wording
+  // is not one we recognise. Also match common consent phrasings when optional.
+  if (f.type === 'checkbox' && (f.required || /akkoord|privacy|voorwaarden|voorwaard|toestemming|verwerk|gegevens|persoonsgegevens|agree|consent|policy|terms|declaration/.test(s))) return 'consent';
   if (/voorletter|initial/.test(s)) return 'initials';
   if (/postcode|postal|\bzip\b/.test(s)) return 'postcode';
   if (/huisnummer|house.?number|address.?number|huisnr/.test(s)) return 'houseNumber';
@@ -120,6 +123,27 @@ function selectorFor(f: any): string | null {
   if (f.name) return `[name="${f.name}"]`;
   if (f.id) return `#${(f.id as string).replace(/([^\w-])/g, '\\$1')}`;
   return null;
+}
+
+// Fill a text field robustly. Playwright's .fill() silently no-ops on some
+// framework-controlled inputs (the field looked filled in code but stayed empty
+// on the page — the "fail firstName" case). So we READ BACK the value and, if it
+// did not take, retry by focusing and typing key-by-key (short fields) or
+// re-filling (long message). Returns whether the field ended up non-empty.
+async function fillText(page: any, sel: string, value: string, short: boolean): Promise<boolean> {
+  if (!value) return false;
+  const loc = page.locator(sel).first();
+  try { await loc.fill(value, { timeout: 6000 }); } catch { /* retry below */ }
+  const readBack = async (): Promise<string> =>
+    (await loc.inputValue().catch(async () => (await loc.textContent().catch(() => '')) || '')).trim();
+  if ((await readBack()).length) return true;
+  try {
+    await loc.click({ timeout: 2000 });
+    await loc.fill('', { timeout: 2000 }).catch(() => {});
+    if (short) await loc.pressSequentially(value, { timeout: 6000 });
+    else await loc.fill(value, { timeout: 6000 });
+  } catch { /* give up */ }
+  return (await readBack()).length > 0;
 }
 
 // Find the agency's contact email on a listing that has no web form. Prefers
@@ -259,22 +283,36 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
             if (pick) { await page.selectOption(sel, pick.v); log.push(`ok select ${f.label || f.name}`); }
           } else if (cls === 'consent') {
             const cb = page.locator(sel).first();
-            // Ignore hidden checkboxes: these are usually off-screen cookie/newsletter
-            // boxes that classify() mislabels as consent, not part of the contact form.
-            if (!(await cb.isVisible().catch(() => false))) { log.push('skip hidden consent'); continue; }
-            // Visible consent boxes are often custom-styled (real <input> hidden behind a
-            // label), so plain .check() times out. Try check, forced check, then the label.
-            try { await cb.check({ timeout: 3000 }); log.push('ok consent'); }
-            catch {
-              try { await cb.check({ force: true, timeout: 3000 }); log.push('ok consent (forced)'); }
-              catch {
-                if (f.id) { await page.locator(`label[for="${(f.id as string).replace(/([^\w-])/g, '\\$1')}"]`).first().click({ timeout: 3000 }); log.push('ok consent (label)'); }
-                else { await cb.click({ force: true, timeout: 3000 }); log.push('ok consent (click)'); }
+            // Decide whether to tick from the LABEL, not from visibility or the
+            // DOM `required` flag: agencies mark consent required only visually
+            // (a "*") and hide the real <input> behind a custom-styled label, so
+            // the box looks "hidden, not required" in the DOM yet MUST be ticked
+            // (this was the VBO/Woonzeker validation-failure bug). Skip only what
+            // is clearly marketing/newsletter or a honeypot trap.
+            const lbl = `${f.label} ${f.name} ${f.id} ${f.placeholder}`.toLowerCase();
+            const NOISE_RE = /nieuwsbrief|newsletter|aanbieding|mailing|marketing|reclame|op de hoogte|promot|honeypot|\bhp[_-]|nickname|\bwebsite\b|\burl\b/;
+            const CONSENT_RE = /akkoord|toestemming|voorwaard|privacy|gegevens|persoonsgegevens|\bagree\b|consent|\bterms\b|policy|declaration|verwerk|ga akkoord/;
+            if (NOISE_RE.test(lbl) && !CONSENT_RE.test(lbl)) { log.push('skip marketing/noise checkbox'); }
+            else {
+              let ticked = false;
+              // Try, in order: native check, forced check, click the label, and a
+              // JS click that bypasses visibility/pointer-events and fires the
+              // native change event a React/Vue validator listens to.
+              for (const how of ['check', 'force', 'label', 'js'] as const) {
+                try {
+                  if (how === 'check') await cb.check({ timeout: 2000 });
+                  else if (how === 'force') await cb.check({ force: true, timeout: 2000 });
+                  else if (how === 'label') { if (!f.id) continue; await page.locator(`label[for="${(f.id as string).replace(/([^\w-])/g, '\\$1')}"]`).first().click({ timeout: 2000, force: true }); }
+                  else await cb.evaluate((el: any) => { if (!el.checked) el.click(); if (!el.checked) { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); } });
+                  if (await cb.isChecked().catch(() => false)) { ticked = true; log.push(`ok consent (${how})`); break; }
+                } catch { /* next strategy */ }
               }
+              if (!ticked) log.push('fail consent');
             }
           } else if (cls) {
-            await page.locator(sel).first().fill(values[cls], { timeout: 8000 }); log.push(`ok ${cls}`);
-            if (cls === 'email' || cls === 'message') coreFilled++;
+            const okFill = await fillText(page, sel, values[cls], cls !== 'message');
+            log.push(`${okFill ? 'ok' : 'fail'} ${cls}`);
+            if (okFill && (cls === 'email' || cls === 'message')) coreFilled++;
           } else if (f.required && f.type !== 'checkbox') {
             unmapped.push(f.label || f.name || '(unnamed)');
           }
