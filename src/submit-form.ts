@@ -139,7 +139,7 @@ export async function captureProof(page: any, tag: string, log: string[]): Promi
 // "reactie is verzonden", "bedankt voor je reactie") so a bare field LABEL like
 // "Your message" on the un-submitted form never counts as a confirmation.
 const CONFIRM_RE =
-  /bedankt voor (?:je|jouw|uw)|hartelijk dank|dank voor (?:je|jouw|uw) (?:bericht|reactie|aanvraag|interesse)|reactie is (?:verstuurd|verzonden|ontvangen|binnen)|bericht is (?:verstuurd|verzonden|ontvangen)|aanvraag is (?:verstuurd|verzonden|ontvangen|binnen)|succesvol (?:verzonden|verstuurd|ontvangen|ingediend)|we nemen (?:zo snel mogelijk |z\.s\.m\.? )?contact|thank you for (?:your|contacting|reaching|getting)|your (?:message|request|enquiry|inquiry|reaction|response|application) (?:has been|was) (?:sent|received|submitted|forwarded)|has been (?:sent|received|submitted) successfully|message (?:has been )?sent|successfully (?:sent|submitted|received)|we(?:'ve| have) received your/i;
+  /bedankt voor (?:je|jouw|uw)|hartelijk dank|dank voor (?:je|jouw|uw) (?:bericht|reactie|aanvraag|interesse|inschrijving)|(?:reactie|bericht|aanvraag|inschrijving|aanmelding) is (?:verstuurd|verzonden|ontvangen|binnen|in goede orde)|we hebben (?:je|jouw|uw) [^.]{0,30}(?:ontvangen|in goede orde ontvangen)|(?:aanvraag|reactie|bericht|inschrijving|aanmelding) ontvangen|succesvol (?:verzonden|verstuurd|ontvangen|ingediend|ingeschreven)|we nemen (?:zo snel mogelijk |z\.s\.m\.? )?contact|neemt? [^.]{0,25}contact met (?:je|jou|u) op|binnen [^.]{0,15}(?:werkdagen|dagen|uur)[^.]{0,25}contact|je bent ingeschreven|thank you for (?:your|contacting|reaching|getting)|thanks for (?:your|reaching|getting|contacting)|your (?:message|request|enquiry|inquiry|reaction|response|application|interest) (?:has been|was|is)? ?(?:sent|received|submitted|forwarded|registered)|has been (?:sent|received|submitted|registered) successfully|message (?:has been )?sent|successfully (?:sent|submitted|received|registered)|we(?:'ve| have| will| ?'ll) (?:received your|be in touch|contact you)|(?:our|the) (?:agent|team|office|broker|makelaar) will (?:contact|be in touch|reach)/i;
 
 // A blocked / error page (WAF, proxy IP ban, rate limit, Cloudflare challenge).
 // Matched only on SHORT bodies / the title so a stray "forbidden" in a full
@@ -189,12 +189,27 @@ function isSuccessUrl(url: string, urlBefore: string): boolean {
   } catch { return false; }
 }
 
+// Is the contact form we just filled gone from the page (across all frames)?
+// A submitted form is typically replaced by a thank-you state, so the message /
+// email inputs disappear. Used only as a positive signal when the page ALSO
+// navigated away, to avoid mistaking a multi-step form for a success.
+async function isContactFormGone(page: any): Promise<boolean> {
+  for (const frame of page.frames()) {
+    const present = await frame.evaluate(() => {
+      const vis = (el: any) => el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      return Array.from(document.querySelectorAll('textarea, input[type=email], input[name*="mail" i], input[name*="bericht" i], input[name*="message" i]')).some(vis);
+    }).catch(() => false);
+    if (present) return false; // a fillable contact field is still visible somewhere
+  }
+  return true;
+}
+
 // Poll for up to ~timeoutMs after a submit click and classify the outcome.
 export async function verifySubmission(
   page: any,
   opts: { urlBefore: string; timeoutMs?: number } = { urlBefore: '' },
 ): Promise<{ verdict: SubmitVerdict; detail: string }> {
-  const deadline = Date.now() + (opts.timeoutMs ?? 12_000);
+  const deadline = Date.now() + (opts.timeoutMs ?? 16_000);
   let last: { text: string; title: string; url: string; len: number } = { text: '', title: '', url: '', len: 0 };
   while (Date.now() < deadline) {
     last = await pageSnapshot(page);
@@ -204,9 +219,16 @@ export async function verifySubmission(
     if (isSuccessUrl(last.url, opts.urlBefore)) return { verdict: 'confirmed', detail: 'redirected to a confirmation page' };
     await page.waitForTimeout(1200);
   }
-  // Timed out with no positive signal. A visible validation error means the
-  // submit was rejected; otherwise we genuinely cannot tell (uncertain).
+  // Timed out with no explicit success text. A visible validation error means the
+  // submit was rejected.
   if (VALIDATION_RE.test(last.text)) return { verdict: 'failed', detail: 'form validation error (submit rejected)' };
+  // If the page navigated away AND the contact form is gone (and it is not an
+  // error page, checked above), the submit was accepted even though the success
+  // wording was not one we recognise. Requiring a URL change keeps a still-on-
+  // screen validation error (same URL) from being mistaken for success.
+  if (last.url && last.url !== opts.urlBefore && (await isContactFormGone(page))) {
+    return { verdict: 'confirmed', detail: 'navigated away after submit, form no longer present' };
+  }
   return { verdict: 'uncertain', detail: 'no confirmation signal after submit' };
 }
 
