@@ -134,7 +134,9 @@
     "328b08faf37842aba5c360548a4d2cad",
     "e3c64dbade3e44bc9f42ecbe0a7ba7ea",
     "7624b6da8740421fadcfabab1e965f05",
-    "11a63b32ea3d4686848ec9021d898c77"
+    "11a63b32ea3d4686848ec9021d898c77",
+    "c80d23ce66974513ba6b7e181a6a9a51",
+    "279bf017bebd4447b7e05a0fb58340cb"
   ],
   "addresses": [
     "vandespiegelstraat19a",
@@ -149,7 +151,7 @@
     "hasseltsestraatdenhaag"
   ],
   "appliedToday": {
-    "date": "2026-07-31",
+    "date": "2026-08-01",
     "count": 0
   }
 }
