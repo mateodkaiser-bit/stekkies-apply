@@ -49,7 +49,7 @@ export interface ApplyResult {
 
 async function freshSession() {
   const session: any = await bb.sessions.create({
-    browserSettings: { context: { id: contexts.pararius, persist: false }, solveCaptchas: true, verified: true, os: 'mac' },
+    browserSettings: { context: { id: contexts.pararius, persist: false }, solveCaptchas: true },
     proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
     timeout: 220,
   } as any);

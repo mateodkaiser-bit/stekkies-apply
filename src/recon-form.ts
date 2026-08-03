@@ -23,7 +23,7 @@ const contextId = contexts[siteKey];
 
 async function main() {
   const session: any = await bb.sessions.create({
-    browserSettings: { context: contextId ? { id: contextId, persist: false } : undefined, solveCaptchas: true, verified: true, os: 'mac' },
+    browserSettings: { context: contextId ? { id: contextId, persist: false } : undefined, solveCaptchas: true },
     proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
     timeout: 200,
   } as any);

@@ -22,7 +22,7 @@ async function readDetails(url: string) {
     let browser: any;
     try {
       const session: any = await bb.sessions.create({
-        browserSettings: { context: { id: contexts.pararius, persist: false }, solveCaptchas: true, verified: true, os: 'mac' },
+        browserSettings: { context: { id: contexts.pararius, persist: false }, solveCaptchas: true },
         proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
         timeout: 120,
       } as any);

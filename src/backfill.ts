@@ -31,7 +31,7 @@ async function main() {
   console.log(`▸ ${matches.length} unique matches to process.\n`);
 
   const session: any = await bb.sessions.create({
-    browserSettings: { context: { id: contextId, persist: false }, verified: true, os: 'mac' },
+    browserSettings: { context: { id: contextId, persist: false } },
     timeout: 900,
   } as any);
   console.log(`  Session: https://www.browserbase.com/sessions/${session.id}\n`);

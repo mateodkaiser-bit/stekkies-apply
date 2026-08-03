@@ -54,17 +54,39 @@ const GATED: Record<string, string> = {
   vbtverhuurmakelaars: 'account/login required (register once to enable auto-apply)',
   wonennu: 'account/login required (register once to enable auto-apply)',
 };
-type Seen = { matchIds: string[]; addresses: string[]; appliedToday?: { date: string; count: number }; retries?: Record<string, number> };
+type Seen = {
+  matchIds: string[];
+  addresses: string[];
+  appliedToday?: { date: string; count: number };
+  retries?: Record<string, number>;
+  // Resolved match-page info, keyed by match id. Reading a Stekkies match page
+  // costs a full Browserbase session (~1.7 min of a metered browser minute
+  // budget) and the answer never changes, so cache it. This makes a retry — or
+  // a listing we bail on for a gated/paywalled source — cost zero sessions the
+  // second time round. Lives in seen.json so CI's existing commit step
+  // persists it across runs with no workflow change.
+  matchInfo?: Record<string, any>;
+};
+const MATCH_INFO_KEEP = 300;
 // Failures where the form was never reached/submitted, so retrying on a later
 // run is safe (no double-apply risk) and often succeeds (proxy IP roulette).
 const TRANSIENT = /blocked the load|time-?d? ?out|timeout|net::|ECONN|ETIMEDOUT|Target closed|browser has been closed/i;
 const MAX_RETRIES = 3;
+// Account-level failures: the Browserbase session was never even created, so
+// the listing was never opened, let alone applied to. These are NOT the
+// listing's fault and must never consume it — not even against the retry
+// budget, or an outage lasting longer than MAX_RETRIES runs silently burns
+// every match that arrives during it (this is exactly what happened when the
+// trial ended on 2026-07-28: 402 "minutes limit", then 403 "Verified mode is
+// only available on the Enterprise plan", and 32 listings were consumed
+// without a single application being sent).
+const INFRA = /\b(401|402|403|429)\b|Enterprise plan|only available on the|minutes limit|quota|rate limit|upgrade|Unauthorized|invalid api key/i;
 const loadSeen = (): Seen => (existsSync(SEEN) ? JSON.parse(readFileSync(SEEN, 'utf8')) : { matchIds: [], addresses: [] });
 const saveSeen = (s: Seen) => writeFileSync(SEEN, JSON.stringify(s, null, 2));
 
 async function openMatchPage(matchUrl: string) {
   const session: any = await bb.sessions.create({
-    browserSettings: { context: { id: contexts.stekkies, persist: false }, verified: true, os: 'mac' },
+    browserSettings: { context: { id: contexts.stekkies, persist: false } },
     proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
     timeout: 120,
   } as any);
@@ -102,9 +124,18 @@ async function main() {
   for (const mt of fresh) {
     let line = '';
     let transient = false;
+    let infra = false;
+    let deferred = false;
     let info: any = null;
     try {
-      info = await openMatchPage(mt.redirectUrl);
+      const cached = seen.matchInfo?.[mt.matchId];
+      if (cached) {
+        info = cached;
+        console.log(`   (cached match info for ${mt.matchId} — no browser session needed)`);
+      } else {
+        info = await openMatchPage(mt.redirectUrl);
+        (seen.matchInfo ??= {})[mt.matchId] = info;
+      }
       const price = mt.fields.priceEur ? `EUR ${mt.fields.priceEur}` : '';
       const label = `${info.address || mt.matchId} (${info.sourceSite || '?'}, ${price})`;
 
@@ -115,7 +146,11 @@ async function main() {
       } else if (GATED[normSite(info.sourceSite)]) {
         line = `NEEDS_MANUAL: ${label} | ${GATED[normSite(info.sourceSite)]}`;
       } else if (LIVE && seen.appliedToday!.count >= MAX_PER_DAY) {
-        line = `SKIPPED: ${label} | daily application cap (${MAX_PER_DAY}) reached`;
+        // Deferred, NOT declined: we chose not to apply yet. Consuming here
+        // would permanently discard a listing we never even looked at, so the
+        // cap would quietly destroy the backlog it is meant to postpone.
+        deferred = true;
+        line = `SKIPPED: ${label} | daily application cap (${MAX_PER_DAY}) reached — deferred to tomorrow`;
       } else if (/pararius/i.test(info.sourceSite || '') || /pararius\./i.test(info.sourceUrl || '')) {
         const r = await applyPararius(info.sourceUrl!, {
           live: LIVE,
@@ -144,16 +179,23 @@ async function main() {
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       }
       transient = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && TRANSIENT.test(line);
+      infra = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && INFRA.test(line);
     } catch (e) {
       line = `ERROR: ${mt.matchId} | ${(e as Error).message.slice(0, 60)}`;
       transient = TRANSIENT.test((e as Error).message);
+      infra = INFRA.test((e as Error).message);
     }
     // Only CONSUME a match (mark it seen) on a LIVE run. In DRY-RUN we are just
     // testing: marking it seen here would burn a fresh listing so it never gets
     // a real application. seen.json is only persisted below when LIVE too.
     // Transient load/network failures are NOT consumed: they get MAX_RETRIES
     // attempts across later runs (fresh proxy IPs each time) before giving up.
-    if (LIVE) {
+    // An account/plan failure means we never reached the listing at all. Leave
+    // it completely untouched (not even a retry tick) so it is picked up again
+    // as soon as the account is healthy.
+    if (LIVE && (infra || deferred)) {
+      if (infra) line += ' | account/plan problem — listing left unconsumed, will retry';
+    } else if (LIVE) {
       if (!transient) {
         seen.matchIds.push(mt.matchId);
         if (seen.retries) delete seen.retries[mt.matchId];
@@ -204,6 +246,14 @@ async function main() {
 
   // Persist dedupe state only on LIVE runs. DRY-RUN must not write seen.json,
   // otherwise a test run consumes fresh matches and the daily cron never applies.
+  // Keep the match-info cache bounded: retain only entries for matches we might
+  // still see (recent ids), newest last, so seen.json cannot grow without limit.
+  if (seen.matchInfo) {
+    const keys = Object.keys(seen.matchInfo);
+    if (keys.length > MATCH_INFO_KEEP) {
+      for (const k of keys.slice(0, keys.length - MATCH_INFO_KEEP)) delete seen.matchInfo[k];
+    }
+  }
   if (LIVE) saveSeen(seen);
   else console.log('DRY-RUN: not persisting seen.json (no matches consumed).');
 

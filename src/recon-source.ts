@@ -14,7 +14,7 @@ const url = process.argv[2];
 if (!url) throw new Error('usage: tsx src/recon-source.ts "<url>"');
 
 async function main() {
-  const session: any = await bb.sessions.create({ browserSettings: { verified: true, os: 'mac' }, timeout: 300 } as any);
+  const session: any = await bb.sessions.create({ browserSettings: {}, timeout: 300 } as any);
   console.log(`Session: https://www.browserbase.com/sessions/${session.id}\n`);
   const browser = await chromium.connectOverCDP(session.connectUrl);
   const ctx = browser.contexts()[0];

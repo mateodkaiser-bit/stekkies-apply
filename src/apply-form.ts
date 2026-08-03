@@ -32,7 +32,7 @@ export interface ApplyResult {
 }
 
 async function freshSession(contextId?: string) {
-  const browserSettings: any = { solveCaptchas: true, verified: true, os: 'mac' };
+  const browserSettings: any = { solveCaptchas: true };
   if (contextId) browserSettings.context = { id: contextId, persist: false };
   const session: any = await bb.sessions.create({
     browserSettings,
