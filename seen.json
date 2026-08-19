@@ -249,7 +249,8 @@
     "733607d4f0ab4f6795317eb14b6ae8fb",
     "34244a31562643649e60c1f476adf744",
     "910272cf9f164a638aa36e1f0d397d77",
-    "361b52e116904b2d8ab97ffe399a8b39"
+    "361b52e116904b2d8ab97ffe399a8b39",
+    "c84b602791ed495181136ac4ac51fad4"
   ],
   "addresses": [
     "vandespiegelstraat19a",
@@ -1381,7 +1382,6 @@
     }
   },
   "retries": {
-    "ba91d167ac8f4e4bbcb84b824cba713a": 2,
-    "c84b602791ed495181136ac4ac51fad4": 2
+    "ba91d167ac8f4e4bbcb84b824cba713a": 2
   }
 }
