@@ -294,6 +294,10 @@ async function main() {
         }
       }
     }
+    // Once a listing is consumed it can never be retried, so its attempt tally
+    // is dead weight — and seen.json is committed on every CI iteration, so
+    // dead weight there is paid for for ever. Drop it.
+    if (LIVE && seen.attempts && seen.matchIds.includes(mt.matchId)) delete seen.attempts[mt.matchId];
     console.log(' -', line);
     summary.push(line);
     // Always record the resolved street address and the real listing link (fall
@@ -330,6 +334,12 @@ async function main() {
   // otherwise a test run consumes fresh matches and the daily cron never applies.
   // Keep the match-info cache bounded: retain only entries for matches we might
   // still see (recent ids), newest last, so seen.json cannot grow without limit.
+  // Self-heal: sweep attempt tallies for listings that are already consumed
+  // (e.g. recorded before this prune existed), so the file cannot creep upward.
+  if (seen.attempts) {
+    const consumed = new Set(seen.matchIds);
+    for (const k of Object.keys(seen.attempts)) if (consumed.has(k)) delete seen.attempts[k];
+  }
   if (seen.matchInfo) {
     const keys = Object.keys(seen.matchInfo);
     if (keys.length > MATCH_INFO_KEEP) {
