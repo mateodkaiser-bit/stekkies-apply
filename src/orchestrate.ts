@@ -110,10 +110,11 @@ const MAX_SESSIONS_PER_DAY = Number((process.argv.find((a) => a.startsWith('--ma
 const loadSeen = (): Seen => (existsSync(SEEN) ? JSON.parse(readFileSync(SEEN, 'utf8')) : { matchIds: [], addresses: [] });
 const saveSeen = (s: Seen) => writeFileSync(SEEN, JSON.stringify(s, null, 2));
 
-async function openMatchPage(matchUrl: string) {
+async function openMatchPage(matchUrl: string, useProxy: boolean) {
   const session: any = await bb.sessions.create({
     browserSettings: { context: { id: contexts.stekkies, persist: false } },
-    proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }],
+    // Only bytes that go through the Browserbase proxy are metered.
+    ...(useProxy ? { proxies: [{ type: 'browserbase', geolocation: { country: 'NL' } }] } : {}),
     timeout: 120,
   } as any);
   const browser = await chromium.connectOverCDP(session.connectUrl);
@@ -125,6 +126,27 @@ async function openMatchPage(matchUrl: string) {
   } finally {
     await browser.close().catch(() => {});
   }
+}
+
+// Reading a Stekkies match page is roughly half of all sessions (one per new
+// listing, then cached). Unlike the listing sites, Stekkies is OUR OWN account
+// on a site that does not bot-block us, so read it WITHOUT the NL proxy and
+// those bytes cost nothing at all — proxy bandwidth is the only metered
+// resource (invoice Jul 14-Aug 14: $19.55 of proxy overage, $0.00 of browser
+// hours). If the unproxied read comes back with no listing link — a block page,
+// a login wall, a geo-gate — fall back to the proxied read once, so the worst
+// case is the one session we used to spend unconditionally, plus a cheap probe.
+async function readMatch(matchUrl: string, onSession: () => void) {
+  onSession();
+  try {
+    const info = await openMatchPage(matchUrl, false);
+    if (info.sourceUrl) return info;
+    console.log('   (unproxied match read found no listing link — retrying via the NL proxy)');
+  } catch (e) {
+    console.log(`   (unproxied match read failed: ${(e as Error).message.slice(0, 60)} — retrying via the NL proxy)`);
+  }
+  onSession();
+  return openMatchPage(matchUrl, true);
 }
 
 async function main() {
@@ -173,8 +195,7 @@ async function main() {
         info = cached;
         console.log(`   (cached match info for ${mt.matchId} — no browser session needed)`);
       } else {
-        seen.sessionsToday!.count++;
-        info = await openMatchPage(mt.redirectUrl);
+        info = await readMatch(mt.redirectUrl, () => { seen.sessionsToday!.count++; });
         (seen.matchInfo ??= {})[mt.matchId] = info;
       }
       const price = mt.fields.priceEur ? `EUR ${mt.fields.priceEur}` : '';
