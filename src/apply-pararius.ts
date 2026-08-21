@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
 import { clickSubmit, verifySubmission, loadBlockedStatus, captureProof } from './submit-form.ts';
+import { installNetDiet } from './net-diet.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -55,7 +56,7 @@ async function freshSession() {
   } as any);
   const browser = await chromium.connectOverCDP(session.connectUrl);
   const ctx = browser.contexts()[0];
-  await ctx.route('**/*', (r) => (['font', 'image', 'media'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
+  await installNetDiet(ctx);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   return { browser, ctx, page, sessionId: session.id as string };
 }

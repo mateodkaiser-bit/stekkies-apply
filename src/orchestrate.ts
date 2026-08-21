@@ -22,6 +22,7 @@ import { applyForm } from './apply-form.ts';
 import { applyGeneric } from './apply-generic.ts';
 import { sendApplicationEmail } from './send-email.ts';
 import { confirmPendingOptIns } from './confirm-optin.ts';
+import { installNetDiet } from './net-diet.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -59,6 +60,16 @@ type Seen = {
   addresses: string[];
   appliedToday?: { date: string; count: number };
   retries?: Record<string, number>;
+  // Total Browserbase-spending attempts per match id, counted for EVERY
+  // non-success outcome whatever we classified it as. The retry/infra counters
+  // above are deliberately forgiving, so a misclassification can make a single
+  // listing retry for ever (Van Galenstraat, 2026-08-20: a target-site "403"
+  // read as an account problem, 200+ sessions in 36h). This one is the backstop
+  // that cannot be talked out of giving up.
+  attempts?: Record<string, number>;
+  // Browserbase sessions started today, so a runaway of any kind is capped in
+  // money terms and not just in listings.
+  sessionsToday?: { date: string; count: number };
   // Resolved match-page info, keyed by match id. Reading a Stekkies match page
   // costs a full Browserbase session (~1.7 min of a metered browser minute
   // budget) and the answer never changes, so cache it. This makes a retry — or
@@ -81,6 +92,21 @@ const MAX_RETRIES = 3;
 // only available on the Enterprise plan", and 32 listings were consumed
 // without a single application being sent).
 const INFRA = /\b(401|402|403|429)\b|Enterprise plan|only available on the|minutes limit|quota|rate limit|upgrade|Unauthorized|invalid api key/i;
+// ...but INFRA above is matched against a result line that CONTAINS TEXT WE
+// SCRAPED FROM THE LISTING SITE (page title / body / validation message). A
+// listing site that bot-blocks us renders its own "403" or "429" page, and that
+// string used to reach the INFRA test and be read as "our Browserbase account
+// is broken" -> never consume the listing, never even tick the retry counter ->
+// retry every 5 minutes for ever. Verdicts the appliers derive from page
+// CONTENT are the listing's own answer and must never be classified as infra.
+const PAGE_VERDICT = /blocked\/error page|form validation error|no contact form|could not fill|agent could not complete|paywall|account or login required|account\/login required/i;
+const isInfra = (s: string) => INFRA.test(s) && !PAGE_VERDICT.test(s);
+// Hard ceiling on attempts per listing, regardless of classification.
+const MAX_ATTEMPTS = 6;
+// Hard ceiling on Browserbase sessions per day. Normal traffic is ~15-25
+// listings/day at 1-2 sessions each; this only fires when something has gone
+// wrong, and it fires before the bill does.
+const MAX_SESSIONS_PER_DAY = Number((process.argv.find((a) => a.startsWith('--maxsessions=')) || '').split('=')[1] || 80);
 const loadSeen = (): Seen => (existsSync(SEEN) ? JSON.parse(readFileSync(SEEN, 'utf8')) : { matchIds: [], addresses: [] });
 const saveSeen = (s: Seen) => writeFileSync(SEEN, JSON.stringify(s, null, 2));
 
@@ -92,6 +118,7 @@ async function openMatchPage(matchUrl: string) {
   } as any);
   const browser = await chromium.connectOverCDP(session.connectUrl);
   const ctx = browser.contexts()[0];
+  await installNetDiet(ctx);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   try {
     return await readMatchPage(page, matchUrl);
@@ -104,6 +131,7 @@ async function main() {
   const seen = loadSeen();
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
   if (!seen.appliedToday || seen.appliedToday.date !== today) seen.appliedToday = { date: today, count: 0 };
+  if (!seen.sessionsToday || seen.sessionsToday.date !== today) seen.sessionsToday = { date: today, count: 0 };
   const emails = await fetchStekkiesMatches(30); // fetch enough to catch up on overnight backlog
 
   const matches: any[] = [];
@@ -127,12 +155,25 @@ async function main() {
     let infra = false;
     let deferred = false;
     let info: any = null;
+    // Money guard. Every listing we process costs 1-2 proxied Browserbase
+    // sessions, and proxy bandwidth is the metered resource that actually goes
+    // into overage ($0.012/MB past 1 GB). Past the daily session budget we stop
+    // and DEFER — the listing is left unconsumed for tomorrow, never discarded.
+    if (LIVE && seen.sessionsToday!.count >= MAX_SESSIONS_PER_DAY) {
+      deferred = true;
+      line = `SKIPPED: ${mt.matchId} | daily Browserbase session budget (${MAX_SESSIONS_PER_DAY}) reached — deferred`;
+      console.log(' -', line);
+      summary.push(line);
+      entries.push({ status: 'SKIPPED', address: null, url: mt.redirectUrl || '', site: '?', price: '', raw: line });
+      continue;
+    }
     try {
       const cached = seen.matchInfo?.[mt.matchId];
       if (cached) {
         info = cached;
         console.log(`   (cached match info for ${mt.matchId} — no browser session needed)`);
       } else {
+        seen.sessionsToday!.count++;
         info = await openMatchPage(mt.redirectUrl);
         (seen.matchInfo ??= {})[mt.matchId] = info;
       }
@@ -152,6 +193,7 @@ async function main() {
         deferred = true;
         line = `SKIPPED: ${label} | daily application cap (${MAX_PER_DAY}) reached — deferred to tomorrow`;
       } else if (/pararius/i.test(info.sourceSite || '') || /pararius\./i.test(info.sourceUrl || '')) {
+        seen.sessionsToday!.count++;
         const r = await applyPararius(info.sourceUrl!, {
           live: LIVE,
           hint: { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city },
@@ -160,6 +202,7 @@ async function main() {
         line = finishLine(`${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`, r);
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       } else if (normSite(info.sourceSite) === 'vbo' || /vastgoednederland/i.test(info.sourceUrl || '')) {
+        seen.sessionsToday!.count++;
         const r = await applyVbo(info.sourceUrl!, {
           live: LIVE,
           hint: { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city },
@@ -170,21 +213,39 @@ async function main() {
       } else {
         // Every other source: fast adaptive DOM filler, with the slow vision agent as a last resort.
         const hint = { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city, sourceSite: info.sourceSite || undefined };
+        seen.sessionsToday!.count++;
         let r: any = await applyForm(info.sourceUrl!, { live: LIVE, hint });
         if (r.status === 'needs_manual' && /no fillable contact form/i.test(r.reason || '')) {
+          seen.sessionsToday!.count++;
           r = await applyGeneric(info.sourceUrl!, { live: LIVE, hint });
         }
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
         line = finishLine(`${verb}: ${label} | ${r.reason || r.status}`, r);
         if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
       }
-      transient = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && TRANSIENT.test(line);
-      infra = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && INFRA.test(line);
+      transient = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && TRANSIENT.test(line) && !PAGE_VERDICT.test(line);
+      infra = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && isInfra(line);
     } catch (e) {
       line = `ERROR: ${mt.matchId} | ${(e as Error).message.slice(0, 60)}`;
       transient = TRANSIENT.test((e as Error).message);
-      infra = INFRA.test((e as Error).message);
+      infra = isInfra((e as Error).message);
     }
+    // Backstop: count every attempt that cost us a session, whatever we decided
+    // it was. Past MAX_ATTEMPTS the listing is consumed even if it looks like an
+    // infra problem, because "looks like infra" is exactly the failure mode that
+    // burns a browser budget silently.
+    const succeeded = /^(APPLIED|DRY_RUN_OK|SKIPPED)/.test(line);
+    if (LIVE && !succeeded && !deferred) {
+      seen.attempts ??= {};
+      const a = (seen.attempts[mt.matchId] ?? 0) + 1;
+      seen.attempts[mt.matchId] = a;
+      if (a >= MAX_ATTEMPTS && (infra || transient)) {
+        infra = false;
+        transient = false;
+        line += ` | ${MAX_ATTEMPTS} attempts spent — consuming to stop the retry loop`;
+      }
+    }
+    if (LIVE && succeeded && seen.attempts) delete seen.attempts[mt.matchId];
     // Only CONSUME a match (mark it seen) on a LIVE run. In DRY-RUN we are just
     // testing: marking it seen here would burn a fresh listing so it never gets
     // a real application. seen.json is only persisted below when LIVE too.

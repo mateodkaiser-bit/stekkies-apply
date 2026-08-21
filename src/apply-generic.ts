@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
+import { installNetDiet } from './net-diet.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const profile = JSON.parse(readFileSync(join(__dirname, '..', 'profile.json'), 'utf8'));
@@ -65,6 +66,7 @@ export async function applyGeneric(
   await stagehand.init();
   const sid = (stagehand as any).browserbaseSessionID;
   if (sid) log.push(`replay: https://browserbase.com/sessions/${sid}`);
+  await installNetDiet(stagehand.context, { keepImages: true });
   const page: any = stagehand.context.pages()[0] ?? (await stagehand.context.newPage());
   let result: GenericResult = { status: 'error', log };
 

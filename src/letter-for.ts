@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter } from './generate-letter.ts';
+import { installNetDiet } from './net-diet.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -28,7 +29,7 @@ async function readDetails(url: string) {
       } as any);
       browser = await chromium.connectOverCDP(session.connectUrl);
       const ctx = browser.contexts()[0];
-      await ctx.route('**/*', (r: any) => (['font', 'image', 'media'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
+      await installNetDiet(ctx);
       const page = ctx.pages()[0] ?? (await ctx.newPage());
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
       await page.waitForTimeout(2500);

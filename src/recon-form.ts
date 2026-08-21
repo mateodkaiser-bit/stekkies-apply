@@ -11,6 +11,7 @@ import { chromium } from 'playwright-core';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { installNetDiet } from './net-diet.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const contexts = JSON.parse(readFileSync(join(__dirname, '..', 'contexts.json'), 'utf8'));
@@ -30,7 +31,7 @@ async function main() {
   console.log('Session:', `https://www.browserbase.com/sessions/${session.id}`, contextId ? `(context ${siteKey})` : '(no context)');
   const browser = await chromium.connectOverCDP(session.connectUrl);
   const ctx = browser.contexts()[0];
-  await ctx.route('**/*', (r) => (['font', 'image', 'media'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
+  await installNetDiet(ctx);
   let page = ctx.pages()[0] ?? (await ctx.newPage());
 
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
