@@ -1519,10 +1519,7 @@
   "retries": {
     "ba91d167ac8f4e4bbcb84b824cba713a": 2
   },
-  "attempts": {
-    "ac4cee2d41d64331b716bf008170a231": 1,
-    "472ebaa1f7794fa3a753e9e9c5518782": 1
-  },
+  "attempts": {},
   "sessionsToday": {
     "date": "2026-08-21",
     "count": 3
