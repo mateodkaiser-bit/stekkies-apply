@@ -48,6 +48,24 @@ async function freshSession(contextId?: string) {
 }
 
 // Read visible form fields straight from the DOM. No named inner functions (tsx/esbuild __name safe).
+// Status markers Funda and the agency sites put next to the address. Only
+// consulted when no contact form was found, and the bare words are only trusted
+// near the TOP of the page, where the status badge lives — "recent verhuurd"
+// teasers and footer links further down must not trigger it.
+const GONE_STRONG = /verhuurd onder voorbehoud|verkocht onder voorbehoud|onder optie|ingetrokken|niet meer beschikbaar|deze woning is verhuurd|no longer available/i;
+const GONE_WEAK = /\bverhuurd\b|\bverkocht\b|\brented\b/i;
+async function listingNoLongerAvailable(page: any): Promise<string | null> {
+  try {
+    return await page.evaluate(([strong, weak]: [string, string]) => {
+      const text = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+      const s = new RegExp(strong, 'i').exec(text);
+      if (s) return s[0].toLowerCase();
+      const w = new RegExp(weak, 'i').exec(text.slice(0, 400));
+      return w ? w[0].toLowerCase() : null;
+    }, [GONE_STRONG.source, GONE_WEAK.source]);
+  } catch { return null; }
+}
+
 async function scanFields(page: any): Promise<any[]> {
   return await page.evaluate(() => {
     const els = Array.from(document.querySelectorAll('input, textarea, select'));
@@ -374,7 +392,18 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
           result = { status: 'dry_run', reason: `would email application to ${email}`, letter, availableFrom: details.availableFrom, log };
         }
       } else {
-        result = { status: 'needs_manual', reason: 'no fillable contact form found', letter, log };
+        // No form AND a status badge at the top of the page means the flat is
+        // gone, not that we failed to find the form. Say so, and — because the
+        // orchestrator escalates specifically on "no fillable contact form" —
+        // stop this from spending an expensive CUA vision session on a listing
+        // nobody can rent. Three of the six Funda listings scored "agent could
+        // not complete the form" over 2026-08-10..21 were simply already let:
+        // Kortenaerkade 9-D, Raamstraat 24-A, Loosduinseweg 81-B. The agent
+        // flailed for 46 steps on one of them before giving up.
+        const gone = await listingNoLongerAvailable(page);
+        result = gone
+          ? { status: 'needs_manual', reason: `listing no longer available (${gone})`, letter, log }
+          : { status: 'needs_manual', reason: 'no fillable contact form found', letter, log };
       }
     } else {
       const addr = profile.currentAddress || {};
