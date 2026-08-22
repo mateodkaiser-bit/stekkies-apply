@@ -55,7 +55,22 @@ const streetOnly = (a: string) => a.replace(/\s+\d+[a-z]?(?:\s*[-\/]\s*\d+[a-z]?
 const legacyAddrKey = (address: string, city?: string) => normAddr(`${streetOnly(address)}${city || ''}`);
 const addressAlreadyApplied = (seen: Seen, address: string, city?: string) =>
   seen.addresses.includes(normAddr(address)) || seen.addresses.includes(legacyAddrKey(address, city));
-const recordApplied = (seen: Seen, address: string) => { seen.addresses.push(normAddr(address)); };
+const recordApplied = (seen: Seen, address: string) => { if (!seen.addresses.includes(normAddr(address))) seen.addresses.push(normAddr(address)); };
+// Stekkies emits the SAME flat under more than one match id (Loosduinseweg 81 B
+// arrived as 12d590bf and d4294771, same rent), so the match-id dedupe cannot
+// see a repeat and the address dedupe is the only guard. It used to record only
+// on a CONFIRMED apply, which left the gap that actually bit: a submit that went
+// through but showed no confirmation wording was scored NEEDS_MANUAL, the
+// address was never recorded, and the flat's other match id applied all over
+// again. Funda's own confirmation mails show 17 "Bevestiging van je reactie" for
+// 14 listings between 2026-08-10 and 08-21 — Weteringkade 68, Westeinde 11-H and
+// Zwolsestraat 104 each got two applications from us.
+//
+// A submit is not idempotent, so treat "we clicked submit and saw no explicit
+// failure" as applied-enough to block a second one. An explicit failure (403,
+// validation rejected) is NOT recorded — nothing reached the agency there.
+const submitReached = (r: any) =>
+  r?.status === 'applied' || /submitted|no confirmation/i.test(String(r?.reason || ''));
 const normSite = (s?: string | null) => (s || '').toLowerCase().replace(/[^a-z]/g, '');
 // Sites known to require an account/login. Short-circuited with a clean reason
 // (no agent run wasted). Once you register + we save a Context, remove the entry.
@@ -245,7 +260,8 @@ async function main() {
         });
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
         line = finishLine(`${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`, r);
-        if (r.status === 'applied') { seen.appliedToday!.count++; if (address) recordApplied(seen, address); }
+        if (r.status === 'applied') seen.appliedToday!.count++;
+        if (address && submitReached(r)) recordApplied(seen, address);
       } else if (normSite(info.sourceSite) === 'vbo' || /vastgoednederland/i.test(info.sourceUrl || '')) {
         seen.sessionsToday!.count++;
         const r = await applyVbo(info.sourceUrl!, {
@@ -254,7 +270,8 @@ async function main() {
         });
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
         line = finishLine(`${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`, r);
-        if (r.status === 'applied') { seen.appliedToday!.count++; if (address) recordApplied(seen, address); }
+        if (r.status === 'applied') seen.appliedToday!.count++;
+        if (address && submitReached(r)) recordApplied(seen, address);
       } else {
         // Every other source: fast adaptive DOM filler, with the slow vision agent as a last resort.
         const hint = { address: address || undefined, neighborhood, priceEur: mt.fields.priceEur, city: mt.fields.city, sourceSite: info.sourceSite || undefined };
@@ -266,7 +283,8 @@ async function main() {
         }
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
         line = finishLine(`${verb}: ${label} | ${r.reason || r.status}`, r);
-        if (r.status === 'applied') { seen.appliedToday!.count++; if (address) recordApplied(seen, address); }
+        if (r.status === 'applied') seen.appliedToday!.count++;
+        if (address && submitReached(r)) recordApplied(seen, address);
       }
       transient = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && TRANSIENT.test(line) && !PAGE_VERDICT.test(line);
       infra = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && isInfra(line);
