@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateLetter, type ListingInfo } from './generate-letter.ts';
-import { clickSubmit, verifySubmission, loadBlockedStatus, captureProof } from './submit-form.ts';
+import { clickSubmit, verifySubmission, loadBlockedStatus, captureProof, dismissConsentWall } from './submit-form.ts';
 import { sendListingApplication } from './send-email.ts';
 import { installNetDiet } from './net-diet.ts';
 
@@ -52,14 +52,34 @@ async function scanFields(page: any): Promise<any[]> {
   return await page.evaluate(() => {
     const els = Array.from(document.querySelectorAll('input, textarea, select'));
     const out: any[] = [];
+    // Stamp every control we keep, so selectorFor() can address the EXACT
+    // element the scan classified instead of guessing with [name=] / #id.
+    // Nationaal Grondbezit's contact form has no name and no id on any field,
+    // which used to make selectorFor() return null for all of them.
+    let stamp = 0;
     for (const el of els as any[]) {
       const type = (el.type || '').toLowerCase();
       if (['hidden', 'submit', 'button', 'image', 'reset', 'file'].includes(type)) continue;
       if ((el as HTMLElement).offsetParent === null && type !== 'checkbox') continue;
       const id = el.id || '';
       const lbl = id ? document.querySelector('label[for="' + (window as any).CSS.escape(id) + '"]') : null;
-      const label = ((lbl ? lbl.textContent : '') || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
-      out.push({ tag: el.tagName.toLowerCase(), type, name: el.name || '', id, placeholder: el.placeholder || '', autocomplete: el.getAttribute('autocomplete') || '', label: label.slice(0, 60), required: !!el.required, ariaInvalid: el.getAttribute('aria-invalid') === 'true' });
+      let label = ((lbl ? lbl.textContent : '') || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      // Some forms associate nothing: no label[for], no aria-label, no name, no
+      // id, no placeholder (Nationaal Grondbezit's is all five). The wording is
+      // still on screen, in an ancestor — "Voornaam", "Bijv. jasper@dejong.nl".
+      // Walk up a few levels for the nearest short piece of text and use that,
+      // but ONLY when the field is otherwise anonymous, so a chatty wrapper can
+      // never override a real label.
+      if (!label && !el.name && !el.id && !el.placeholder) {
+        let node: any = el.parentElement;
+        for (let up = 0; up < 3 && node; up++, node = node.parentElement) {
+          const t = String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+          if (t && t.length <= 60) { label = t; break; }
+        }
+      }
+      const aa = String(stamp++);
+      el.setAttribute('data-aa', aa);
+      out.push({ aa, tag: el.tagName.toLowerCase(), type, name: el.name || '', id, placeholder: el.placeholder || '', autocomplete: el.getAttribute('autocomplete') || '', label: label.slice(0, 60), required: !!el.required, ariaInvalid: el.getAttribute('aria-invalid') === 'true' });
     }
     return out;
   });
@@ -69,8 +89,11 @@ async function scanFields(page: any): Promise<any[]> {
 function classify(f: any): string | null {
   const s = `${f.label} ${f.name} ${f.placeholder} ${f.autocomplete} ${f.id}`.toLowerCase();
   if (f.tag === 'textarea' || /bericht|message|motivat|opmerking|toelichting|vraag|comment/.test(s)) return 'message';
-  if (f.type === 'email' || /e-?mail/.test(s)) return 'email';
-  if (f.type === 'tel' || /telefoon|phone|mobiel|\btel\b|gsm/.test(s)) return 'phone';
+  // A worked example counts as a label: "Bijv. jasper@dejong.nl" is an email
+  // field and "Bijv. 06 123 456 78" is a phone field, however anonymous the
+  // input itself is.
+  if (f.type === 'email' || /e-?mail/.test(s) || /@[a-z0-9.-]+\.[a-z]{2,}/.test(s)) return 'email';
+  if (f.type === 'tel' || /telefoon|phone|mobiel|\btel\b|gsm/.test(s) || /\b0\d[\s-]?\d{2,}/.test(s)) return 'phone';
   // Any REQUIRED checkbox on a contact form is a precondition to submit (terms /
   // privacy / "the above is correct") and is safe to tick, even if its wording
   // is not one we recognise. Also match common consent phrasings when optional.
@@ -121,8 +144,19 @@ Return ONLY a JSON array of exactly ${fields.length} entries (role string or nul
 }
 
 function selectorFor(f: any): string | null {
-  if (f.name) return `[name="${f.name}"]`;
-  if (f.id) return `#${(f.id as string).replace(/([^\w-])/g, '\\$1')}`;
+  // Anchor on the TAG we actually scanned. A bare [name="..."] / #id selector is
+  // matched against the whole document, so .first() can land on something that
+  // is not a form control at all: on woonzeker.com [name="name"] resolves to the
+  // <meta name="name"> in <head> (fill times out), and #email resolves to a
+  // <div id="email"> wrapper that shadows the real input — the page ships
+  // duplicate ids. Scoping to the tag, and to visible nodes for everything
+  // except checkboxes (which are legitimately hidden behind styled labels),
+  // makes the selector point at the element the scan classified.
+  const tag = ['input', 'textarea', 'select'].includes(f.tag) ? f.tag : ':is(input, textarea, select)';
+  const vis = f.type === 'checkbox' ? '' : ':visible';
+  if (f.aa != null) return `${tag}[data-aa="${f.aa}"]`;
+  if (f.name) return `${tag}[name="${f.name}"]${vis}`;
+  if (f.id) return `${tag}#${(f.id as string).replace(/([^\w-])/g, '\\$1')}${vis}`;
   return null;
 }
 
@@ -268,6 +302,10 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
   let result: ApplyResult = { status: 'error', log };
   try {
     await page.waitForTimeout(2500);
+    // Must happen BEFORE the scan and the fills: a consent wall does not just
+    // hide the form, it makes fill() time out or silently no-op (see
+    // dismissConsentWall).
+    await dismissConsentWall(page, log);
 
     const details = await page.evaluate(() => {
       const text = document.body ? document.body.innerText : '';
@@ -288,11 +326,24 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
     const hasCore = (arr: any[]) => arr.some((x) => x.cls === 'email') || arr.some((x) => x.cls === 'message');
     let mapped = (await scanFields(page)).map((f) => ({ f, cls: classify(f) }));
     if (!hasCore(mapped)) {
-      for (const t of ['Contact met de makelaar', 'Reageer op deze woning', 'Reageer', 'Ik heb interesse', 'Interesse', 'Contact', 'Meer informatie', 'Bezichtiging', 'Aanvragen']) {
+      const listingUrl = page.url();
+      // Specific, listing-scoped CTAs FIRST. A bare "Contact" is last because on
+      // some sites (Nationaal Grondbezit) it is a nav link to a generic company
+      // contact page: clicking it early navigated away from the listing and every
+      // later candidate was then hunted on the wrong page. "Bezichting" without
+      // the second i is not a typo here — that is how their button is spelled.
+      for (const t of ['Contact met de makelaar', 'Reageer op deze woning', 'Reageer', 'Bezichting aanvragen', 'Bezichtiging aanvragen', 'Bezichtiging', 'Aanvragen', 'Ik heb interesse', 'Interesse', 'Meer informatie', 'Contact']) {
         try { await page.getByRole('button', { name: new RegExp(t, 'i') }).or(page.getByRole('link', { name: new RegExp(t, 'i') })).first().click({ timeout: 3500 }); } catch { /* next */ }
         await page.waitForTimeout(1800);
         mapped = (await scanFields(page)).map((f) => ({ f, cls: classify(f) }));
         if (hasCore(mapped)) { log.push(`form revealed via "${t}"`); break; }
+        // The click took us somewhere with no usable form — go back so the next
+        // candidate is tried against the listing, not against wherever we landed.
+        if (page.url() !== listingUrl) {
+          try { await page.goBack({ waitUntil: 'domcontentloaded', timeout: 15_000 }); await page.waitForTimeout(1200); } catch { /* */ }
+          if (page.url() !== listingUrl) { try { await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 }); await page.waitForTimeout(1200); } catch { /* */ } }
+          await dismissConsentWall(page, log);
+        }
       }
     }
 
@@ -336,6 +387,10 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
       };
       const unmapped: string[] = [];
       let coreFilled = 0;
+      if (process.env.DEBUG_FIELDS) {
+        log.push('DEBUG url: ' + page.url());
+        for (const { f, cls } of mapped) log.push(`DEBUG field cls=${cls} sel=${selectorFor(f)} tag=${f.tag}/${f.type} name="${f.name}" id="${f.id}" label="${f.label}" req=${f.required}`);
+      }
       for (const { f, cls } of mapped) {
         const sel = selectorFor(f);
         if (!sel) { if (f.required && cls) unmapped.push(f.label || f.name); continue; }
@@ -356,6 +411,27 @@ export async function applyForm(url: string, opts: { live?: boolean; hint?: Part
         } catch { log.push(`fail ${cls || f.tag}`); }
       }
       if (unmapped.length) log.push(`unmapped required: ${unmapped.slice(0, 4).join(', ')}`);
+      if (process.env.DEBUG_FIELDS) {
+        // What does the BROWSER think is still wrong? Reads constraint
+        // validation after the fills, so a submit rejection can be diagnosed
+        // without actually sending an application to the agency.
+        const bad = await page.evaluate(() => {
+          const out: any[] = [];
+          const els = Array.from(document.querySelectorAll('input, textarea, select')) as any[];
+          for (const el of els) {
+            const t = (el.type || '').toLowerCase();
+            if (['hidden', 'submit', 'button', 'image', 'reset'].includes(t)) continue;
+            if (el.offsetParent === null && t !== 'checkbox') continue;
+            if (el.checkValidity && el.checkValidity()) continue;
+            out.push({ tag: el.tagName.toLowerCase(), type: t, name: el.name || '', id: el.id || '',
+              required: !!el.required, value: t === 'checkbox' ? String(el.checked) : String(el.value || '').slice(0, 25),
+              why: el.validationMessage || '' });
+          }
+          return out;
+        }).catch(() => []);
+        log.push(`DEBUG invalid-after-fill: ${bad.length}`);
+        for (const b of bad) log.push('DEBUG  ' + JSON.stringify(b));
+      }
 
       await page.waitForTimeout(800);
       try { await page.screenshot({ path: join(__dirname, '..', 'apply-form.png'), fullPage: false, timeout: 15_000 }); log.push('screenshot saved'); } catch { /* */ }

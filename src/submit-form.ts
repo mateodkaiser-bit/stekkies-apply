@@ -249,3 +249,48 @@ export async function confirmSent(page: any): Promise<boolean> {
     return CONFIRM_RE.test(snap.text);
   } catch { return false; }
 }
+
+// ── Cookie / consent walls ──────────────────────────────────────────────────
+//
+// Woonzeker (and sites using the same CMP) render a full-page
+// `.cookie-wall__backdrop` at z-index 7000 over the listing. Playwright's
+// fill() does not hit-test, so this fails in the most misleading way possible:
+// filling the email input TIMES OUT, filling the textarea reports success and
+// then silently does not stick (read-back is empty), while tickCheckbox's `js`
+// strategy bypasses the wall entirely and logs "ok consent". The result was
+// "found a form but could not fill the key fields" — 12 listings over
+// 2026-08-10..21, the single largest failure cluster.
+//
+// Measured on woonzeker.com/huur/woningen/stokroosstraat-199:
+//   wall up   -> [name="email"] fill TIMEOUT, [name="message"] fill "OK" readBack ""
+//   dismissed -> both fill and read back correctly
+//
+// We prefer the option that REJECTS non-essential cookies and only fall back to
+// accepting when a site offers no decline button.
+const CONSENT_DECLINE =
+  /alleen noodzakelijk|noodzakelijke cookies|alleen essenti|weiger|afwijzen|reject all|reject|decline|necessary only|essential only|only necessary/i;
+const CONSENT_ACCEPT =
+  /alles toestaan|accepteer alles|alles accepteren|accepteer|accepteren|akkoord|ga akkoord|accept all|allow all|i agree|agree|got it|^ok$/i;
+
+/**
+ * Best-effort dismissal of a cookie/consent wall, in the main frame and in any
+ * CMP iframe. Returns what it clicked, or '' if nothing matched. Never throws.
+ */
+export async function dismissConsentWall(page: any, log: string[]): Promise<string> {
+  for (const pattern of [CONSENT_DECLINE, CONSENT_ACCEPT]) {
+    for (const frame of page.frames()) {
+      for (const role of ['button', 'link'] as const) {
+        try {
+          const loc = frame.getByRole(role, { name: pattern }).first();
+          if (!(await loc.count().catch(() => 0))) continue;
+          const label = (await loc.textContent().catch(() => ''))?.replace(/\s+/g, ' ').trim().slice(0, 40) || role;
+          await loc.click({ timeout: 2500 });
+          await page.waitForTimeout(900);
+          log.push(`cookie wall: clicked "${label}" (${pattern === CONSENT_DECLINE ? 'declined' : 'accepted'})`);
+          return label;
+        } catch { /* try the next frame/role/pattern */ }
+      }
+    }
+  }
+  return '';
+}
