@@ -10,14 +10,21 @@
 import 'dotenv/config';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import { extractMatchLinks, isStekkiesMatchEmail, parseListingFields, type MatchLink } from './parse-email.ts';
+import { extractMatchLinks, isStekkiesMatchEmail, parseListingCards, parseListingFields, type ListingFields, type MatchLink } from './parse-email.ts';
 
 export interface ParsedMatchEmail {
   emailUid: number;
   subject: string;
   date: Date | null;
   links: MatchLink[];
+  /** Whole-email fields. Kept for callers that only want a rough summary. */
   fields: ReturnType<typeof parseListingFields>;
+  /**
+   * Per-listing fields keyed by match id — address, neighbourhood, price,
+   * bedrooms, surface. Prefer this over `fields`: an email can carry several
+   * listings, and `fields` gives every one of them the FIRST card's numbers.
+   */
+  cards: Map<string, ListingFields>;
 }
 
 function client() {
@@ -55,6 +62,7 @@ export async function fetchStekkiesMatches(limit = 5, onlyUnseen = false): Promi
         date: parsed.date ?? null,
         links: extractMatchLinks(html),
         fields: parseListingFields(subject, text || html),
+        cards: parseListingCards(subject, text || html),
       });
     }
   } finally {

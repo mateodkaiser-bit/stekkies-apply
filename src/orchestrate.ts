@@ -43,6 +43,19 @@ const finishLine = (line: string, r: any): string => {
 };
 
 const normAddr = (a?: string | null) => (a || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+// "Spuistraat 65D" -> "Spuistraat"; "Hooistraat 9-2" -> "Hooistraat".
+const streetOnly = (a: string) => a.replace(/\s+\d+[a-z]?(?:\s*[-\/]\s*\d+[a-z]?)?\s*$/i, '').trim();
+// The 17 addresses recorded before the email parser landed are street+city with
+// no house number ("repelaerstraatdenhaag"), because that is all the match-page
+// scrape ever produced. New keys are street+number ("spuistraat65d"), which is
+// precise enough to tell two flats on one street apart. Match against BOTH so a
+// listing applied to under the old scheme is still recognised, but only RECORD
+// the precise key, so the coarse street-level collision dies out with the
+// legacy entries instead of being carried forward.
+const legacyAddrKey = (address: string, city?: string) => normAddr(`${streetOnly(address)}${city || ''}`);
+const addressAlreadyApplied = (seen: Seen, address: string, city?: string) =>
+  seen.addresses.includes(normAddr(address)) || seen.addresses.includes(legacyAddrKey(address, city));
+const recordApplied = (seen: Seen, address: string) => { seen.addresses.push(normAddr(address)); };
 const normSite = (s?: string | null) => (s || '').toLowerCase().replace(/[^a-z]/g, '');
 // Sites known to require an account/login. Short-circuited with a clean reason
 // (no agent run wasted). Once you register + we save a Context, remove the entry.
@@ -161,7 +174,9 @@ async function main() {
   for (const e of emails) for (const l of e.links) {
     if (s.has(l.matchId)) continue;
     s.add(l.matchId);
-    matches.push({ ...l, fields: e.fields });
+    // Per-listing card, not the whole-email fields: an email can carry several
+    // listings and e.fields gives every one of them the FIRST card's numbers.
+    matches.push({ ...l, fields: e.cards?.get(l.matchId.toLowerCase()) ?? e.fields });
   }
   const fresh = matches.filter((m) => !seen.matchIds.includes(m.matchId)).slice(0, LIMIT);
   console.log(`${matches.length} matches found, ${fresh.length} fresh to process (limit ${LIMIT}). Mode: ${LIVE ? 'LIVE' : 'DRY-RUN'}\n`);
@@ -198,10 +213,19 @@ async function main() {
         info = await readMatch(mt.redirectUrl, () => { seen.sessionsToday!.count++; });
         (seen.matchInfo ??= {})[mt.matchId] = info;
       }
+      // The match-page scrape resolves a street address for only ~13% of
+      // listings, but the match EMAIL carries it for 100% of them, with the
+      // house number and the neighbourhood. Prefer the page (it is the listing
+      // itself) and fall back to the email rather than reporting "address not
+      // resolved". Same for the neighbourhood, which the page never provided at
+      // all — the letter generator has been customising on `undefined`.
+      const address = info.address || mt.fields.address || null;
+      const neighborhood = info.neighborhood || mt.fields.neighborhood || undefined;
+      const where = address ? [address, mt.fields.city].filter(Boolean).join(', ') : mt.matchId;
       const price = mt.fields.priceEur ? `EUR ${mt.fields.priceEur}` : '';
-      const label = `${info.address || mt.matchId} (${info.sourceSite || '?'}, ${price})`;
+      const label = `${where} (${info.sourceSite || '?'}, ${price})`;
 
-      if (info.address && seen.addresses.includes(normAddr(info.address))) {
+      if (address && addressAlreadyApplied(seen, address, mt.fields.city)) {
         line = `SKIPPED: ${label} | already applied to this address`;
       } else if (info.paidToApply) {
         line = `NEEDS_MANUAL: ${label} | paid-to-apply paywall`;
@@ -217,23 +241,23 @@ async function main() {
         seen.sessionsToday!.count++;
         const r = await applyPararius(info.sourceUrl!, {
           live: LIVE,
-          hint: { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city },
+          hint: { address: address || undefined, neighborhood, priceEur: mt.fields.priceEur, city: mt.fields.city },
         });
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
         line = finishLine(`${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`, r);
-        if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
+        if (r.status === 'applied') { seen.appliedToday!.count++; if (address) recordApplied(seen, address); }
       } else if (normSite(info.sourceSite) === 'vbo' || /vastgoednederland/i.test(info.sourceUrl || '')) {
         seen.sessionsToday!.count++;
         const r = await applyVbo(info.sourceUrl!, {
           live: LIVE,
-          hint: { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city },
+          hint: { address: address || undefined, neighborhood, priceEur: mt.fields.priceEur, city: mt.fields.city },
         });
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
         line = finishLine(`${verb}: ${label} | ${r.reason || 'move-in ' + (r.availableFrom || 'n/a')}`, r);
-        if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
+        if (r.status === 'applied') { seen.appliedToday!.count++; if (address) recordApplied(seen, address); }
       } else {
         // Every other source: fast adaptive DOM filler, with the slow vision agent as a last resort.
-        const hint = { address: info.address || undefined, neighborhood: info.neighborhood || undefined, priceEur: mt.fields.priceEur, city: mt.fields.city, sourceSite: info.sourceSite || undefined };
+        const hint = { address: address || undefined, neighborhood, priceEur: mt.fields.priceEur, city: mt.fields.city, sourceSite: info.sourceSite || undefined };
         seen.sessionsToday!.count++;
         let r: any = await applyForm(info.sourceUrl!, { live: LIVE, hint });
         if (r.status === 'needs_manual' && /no fillable contact form/i.test(r.reason || '')) {
@@ -242,7 +266,7 @@ async function main() {
         }
         const verb = r.status === 'applied' ? 'APPLIED' : r.status === 'dry_run' ? 'DRY_RUN_OK' : r.status === 'needs_manual' ? 'NEEDS_MANUAL' : 'ERROR';
         line = finishLine(`${verb}: ${label} | ${r.reason || r.status}`, r);
-        if (r.status === 'applied') { seen.appliedToday!.count++; if (info.address) seen.addresses.push(normAddr(info.address)); }
+        if (r.status === 'applied') { seen.appliedToday!.count++; if (address) recordApplied(seen, address); }
       }
       transient = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && TRANSIENT.test(line) && !PAGE_VERDICT.test(line);
       infra = /NEEDS_MANUAL|ERROR/.test(line.split(':')[0]) && isInfra(line);
@@ -305,7 +329,7 @@ async function main() {
     // email can surface them prominently.
     entries.push({
       status: line.split(':')[0].trim(),
-      address: info?.address || null,
+      address: info?.address || mt.fields?.address || null,
       url: info?.sourceUrl || mt.redirectUrl || '',
       site: info?.sourceSite || '?',
       price: mt.fields.priceEur ? `EUR ${mt.fields.priceEur}` : '',
