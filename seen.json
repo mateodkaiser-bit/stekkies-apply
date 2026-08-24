@@ -266,7 +266,9 @@
     "181c1e474315494490449da2fc5adcf6",
     "ac4cee2d41d64331b716bf008170a231",
     "472ebaa1f7794fa3a753e9e9c5518782",
-    "fc0f6fa8c58242b79277ec0528b3573b"
+    "fc0f6fa8c58242b79277ec0528b3573b",
+    "8bbd8de9785b43e7910541fe877177e6",
+    "c0a5837aea0948c996a8861ffcb34246"
   ],
   "addresses": [
     "vandespiegelstraat19a",
@@ -285,11 +287,12 @@
     "westeindedenhaag",
     "fahrenheitstraatdenhaag",
     "copernicusstraatdenhaag",
-    "repelaerstraatdenhaag"
+    "repelaerstraatdenhaag",
+    "archimedesstraat62aa"
   ],
   "appliedToday": {
     "date": "2026-08-24",
-    "count": 0
+    "count": 1
   },
   "matchInfo": {
     "3c836218bce648b48e70c83ae5742127": {
@@ -1523,6 +1526,22 @@
       "paidToApply": false,
       "responseLetter": "                \n                            <p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">We are writing to express our sincere interest in your property at (place) and would like to apply for a viewing. Our names are Carlotta and Mateo, and we are a couple, both 25 years old, of German and Swiss nationality, currently doing our Master's degrees at TU Delft and Leiden University. We have been living in The Hague for the past two years, and it has really become our home. We are looking to move because our current landlord requires the apartment back for personal use, and can provide a reference confirming our excellent standing as tenants.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">We do not have children or pets, and neither of us smokes or plays any instruments. We lead a quiet lifestyle and have always had a very good relationship with our current neighbors. My partner is self-employed, but to ensure full financial security, my father is happy to act as our guarantor; he owns his own dental practice in Germany and has a very stable income. We are happy to provide any and all supporting documents, including enrollment letters, our current landlord's reference, and full guarantor documentation.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Our preferred move-in date would be the beginning of October. We are flexible for viewings and can provide all documents promptly upon request, and would be delighted to introduce ourselves in person.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Kind regards,&nbsp;</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Carlotta Schaefer and Mateo Kaiser</span></p>\n<p><span id=\"docs-internal-guid-13c2f1c2-7fff-c440-8f64-66fe705ff236\"></span><br>Best regards,<br>Mateo Kaiser<br>[PHONE_NUMBER]</p>\n                        \n            ",
       "address": null
+    },
+    "8bbd8de9785b43e7910541fe877177e6": {
+      "finalUrl": "https://www.stekkies.com/en/api/v1/h/redirect/5696564",
+      "sourceUrl": "https://woonzeker.com/huur/woningen/vrijstaathof-5",
+      "sourceSite": "Woonzeker",
+      "paidToApply": false,
+      "responseLetter": "                \n                            <p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">We are writing to express our sincere interest in your property at (place) and would like to apply for a viewing. Our names are Carlotta and Mateo, and we are a couple, both 25 years old, of German and Swiss nationality, currently doing our Master's degrees at TU Delft and Leiden University. We have been living in The Hague for the past two years, and it has really become our home. We are looking to move because our current landlord requires the apartment back for personal use, and can provide a reference confirming our excellent standing as tenants.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">We do not have children or pets, and neither of us smokes or plays any instruments. We lead a quiet lifestyle and have always had a very good relationship with our current neighbors. My partner is self-employed, but to ensure full financial security, my father is happy to act as our guarantor; he owns his own dental practice in Germany and has a very stable income. We are happy to provide any and all supporting documents, including enrollment letters, our current landlord's reference, and full guarantor documentation.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Our preferred move-in date would be the beginning of October. We are flexible for viewings and can provide all documents promptly upon request, and would be delighted to introduce ourselves in person.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Kind regards,&nbsp;</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Carlotta Schaefer and Mateo Kaiser</span></p>\n<p><span id=\"docs-internal-guid-13c2f1c2-7fff-c440-8f64-66fe705ff236\"></span><br>Best regards,<br>Mateo Kaiser<br>[PHONE_NUMBER]</p>\n                        \n            ",
+      "address": null
+    },
+    "c0a5837aea0948c996a8861ffcb34246": {
+      "finalUrl": "https://www.stekkies.com/en/api/v1/h/redirect/5696565",
+      "sourceUrl": "https://woonzeker.com/huur/woningen/archimedesstraat-62-a",
+      "sourceSite": "Woonzeker",
+      "paidToApply": false,
+      "responseLetter": "                \n                            <p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">We are writing to express our sincere interest in your property at (place) and would like to apply for a viewing. Our names are Carlotta and Mateo, and we are a couple, both 25 years old, of German and Swiss nationality, currently doing our Master's degrees at TU Delft and Leiden University. We have been living in The Hague for the past two years, and it has really become our home. We are looking to move because our current landlord requires the apartment back for personal use, and can provide a reference confirming our excellent standing as tenants.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">We do not have children or pets, and neither of us smokes or plays any instruments. We lead a quiet lifestyle and have always had a very good relationship with our current neighbors. My partner is self-employed, but to ensure full financial security, my father is happy to act as our guarantor; he owns his own dental practice in Germany and has a very stable income. We are happy to provide any and all supporting documents, including enrollment letters, our current landlord's reference, and full guarantor documentation.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Our preferred move-in date would be the beginning of October. We are flexible for viewings and can provide all documents promptly upon request, and would be delighted to introduce ourselves in person.</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Kind regards,&nbsp;</span></p>\n<p dir=\"ltr\" style=\"line-height: 1.38; margin-top: 12pt; margin-bottom: 12pt;\"><span style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; background-color: transparent; font-weight: 400; font-style: normal; font-variant: normal; text-decoration: none; vertical-align: baseline; white-space: pre-wrap;\">Carlotta Schaefer and Mateo Kaiser</span></p>\n<p><span id=\"docs-internal-guid-13c2f1c2-7fff-c440-8f64-66fe705ff236\"></span><br>Best regards,<br>Mateo Kaiser<br>[PHONE_NUMBER]</p>\n                        \n            ",
+      "address": null
     }
   },
   "retries": {
@@ -1531,6 +1550,6 @@
   "attempts": {},
   "sessionsToday": {
     "date": "2026-08-24",
-    "count": 0
+    "count": 4
   }
 }
